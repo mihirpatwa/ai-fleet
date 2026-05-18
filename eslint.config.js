@@ -10,6 +10,10 @@ export default [
       '**/dist/**',
       '**/.next/**',
       '**/coverage/**',
+      // The dashboard is a Next.js app: it self-lints with its own flat
+      // config (next/core-web-vitals + next/typescript). Linting its TSX with
+      // the root's minimal typescript-eslint set would only produce noise.
+      'dashboard/**',
     ],
   },
   {

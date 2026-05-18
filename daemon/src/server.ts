@@ -139,6 +139,55 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     return task;
   });
 
+  // Dashboard task actions. Status transitions reuse the same db.updateTask
+  // path the loop uses; a log event is broadcast so the UI reflects it live.
+  app.post<{ Params: { id: string } }>('/tasks/:id/cancel', (req, reply) => {
+    const task = db.getTask(req.params.id);
+    if (!task) {
+      void reply.code(404);
+      return { error: 'task not found' };
+    }
+    const terminal = ['done', 'failed', 'cancelled'];
+    if (terminal.includes(task.status)) {
+      void reply.code(409);
+      return { error: `task already ${task.status}` };
+    }
+    const updated = db.updateTask(task.id, { status: 'cancelled' });
+    recordAndBroadcast(db, bus, {
+      taskId: task.id,
+      agent: task.assignedAgent,
+      type: 'log',
+      payloadJson: { action: 'cancelled via dashboard' },
+    });
+    logger.info({ taskId: task.id }, 'task cancelled via API');
+    return updated;
+  });
+
+  app.post<{ Params: { id: string } }>('/tasks/:id/retry', (req, reply) => {
+    const task = db.getTask(req.params.id);
+    if (!task) {
+      void reply.code(404);
+      return { error: 'task not found' };
+    }
+    if (task.status !== 'failed') {
+      void reply.code(409);
+      return { error: `only failed tasks can be retried (is ${task.status})` };
+    }
+    const updated = db.updateTask(task.id, {
+      status: 'queued',
+      error: null,
+      retryCount: 0,
+    });
+    recordAndBroadcast(db, bus, {
+      taskId: task.id,
+      agent: task.assignedAgent,
+      type: 'log',
+      payloadJson: { action: 'retry requeued via dashboard' },
+    });
+    logger.info({ taskId: task.id }, 'task retried via API');
+    return updated;
+  });
+
   app.get('/events', (req) => {
     const q = (req.query ?? {}) as Record<string, string | undefined>;
     const since = q['since'] ? Number(q['since']) : undefined;

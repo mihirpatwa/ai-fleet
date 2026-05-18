@@ -114,6 +114,29 @@ describe('server', () => {
     expect(badType.statusCode).toBe(400);
   });
 
+  it('POST /tasks/:id/cancel and /retry move a task through its lifecycle', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/tasks',
+      payload: { goal: 'g', project_root: '/tmp/p' },
+    });
+    const id = created.json().id as string;
+
+    const cancelled = await app.inject({ method: 'POST', url: `/tasks/${id}/cancel` });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json().status).toBe('cancelled');
+
+    // Cancelled is terminal — cancel again is rejected, retry only on failed.
+    expect((await app.inject({ method: 'POST', url: `/tasks/${id}/cancel` })).statusCode).toBe(409);
+    expect((await app.inject({ method: 'POST', url: `/tasks/${id}/retry` })).statusCode).toBe(409);
+    expect((await app.inject({ method: 'POST', url: '/tasks/NOPE/cancel' })).statusCode).toBe(404);
+
+    db.updateTask(id, { status: 'failed', error: 'boom' });
+    const retried = await app.inject({ method: 'POST', url: `/tasks/${id}/retry` });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json()).toMatchObject({ status: 'queued', error: null, retryCount: 0 });
+  });
+
   it('GET /metrics emits Prometheus text', async () => {
     await app.inject({
       method: 'POST',
