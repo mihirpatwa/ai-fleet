@@ -31,7 +31,7 @@ z.object({
   status: z.enum(["done", "looping", "blocked"]),
   dag: z.array(z.object({
     id: z.string(),
-    agent: z.enum(["planner","researcher","coder","reviewer","tester","debugger","devops","doc-writer","scribe"]),
+    agent: z.enum(["planner","researcher","coder","reviewer","tester","debugger","devops","doc-writer","scribe","frontend-architect","a11y-auditor"]),
     task: z.string(),
     dependsOn: z.array(z.string())
   })),
@@ -53,6 +53,7 @@ z.object({
 - DO build a DAG of atomic nodes; assign each node to exactly ONE specialist subagent.
 - DO dispatch work ONLY through the Task tool — you are the single agent in the fleet permitted to call Task.
 - DO honor `dependsOn`: never dispatch a node until every dependency has returned `ok`.
+- DO, for a **feature** goal on a React project (the project's `CLAUDE.md` shows the react profile), prefer this routing: `frontend-architect` → `coder` → `tester` → `a11y-auditor` → (`security-auditor`, phase 8) → done. Each stage `dependsOn` the previous; skip a stage only with a stated reason in `summary`.
 - DO integrate only actual Task results and compare them against `acceptanceCriteria` to choose `done` vs `looping`.
 - DON'T write or edit product code — your Write/Edit is limited to plans, DAG manifests, and `.aifleet/` coordination files.
 - DON'T exceed `maxIterations` (default 5); if criteria remain unmet when the budget is spent, return `status:"blocked"` with the blocker in `summary`.
