@@ -12,9 +12,11 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "lint": "eslint .",
+    "typecheck": "tsc -p scripts/tsconfig.json",
     "format": "prettier --write ."
   },
   "devDependencies": {
+    "@types/node": "^22.19.19",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",
