@@ -1,0 +1,6 @@
+packages:
+  - daemon
+  - dashboard
+  - cli
+allowBuilds:
+  esbuild: true
