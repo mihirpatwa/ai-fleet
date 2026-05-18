@@ -33,6 +33,7 @@ import {
   type SandboxContext,
 } from './sandbox.js';
 import { unresolvedSecurityBlock } from './security.js';
+import type { Alerts } from './alerts.js';
 import { nowTs } from './time.js';
 
 /** `~/.claude/agents` by default; `AIFLEET_AGENTS_DIR` redirects it (tests, smoke). */
@@ -127,6 +128,7 @@ export interface SpawnerDeps {
   sessionMap: SessionTaskMap;
   logger: Logger;
   audit: AuditLog;
+  alerts: Alerts;
 }
 
 export interface Spawner {
@@ -139,7 +141,7 @@ export interface Spawner {
 }
 
 export function createSpawner(deps: SpawnerDeps): Spawner {
-  const { db, config, bus, sessionMap, logger, audit } = deps;
+  const { db, config, bus, sessionMap, logger, audit, alerts } = deps;
   const live = new Map<string, Query>();
   const retryTimers = new Map<string, NodeJS.Timeout>();
 
@@ -188,6 +190,13 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
       db.updateTask(task.id, { status: 'failed', error: message });
       logger.error({ taskId: task.id, attempt, max }, 'agent run failed; retries exhausted');
       emit(task, 'failed', { error: message, retries: attempt });
+      if (task.parentId === null) {
+        void alerts.notify('goal_failed', {
+          taskId: task.id,
+          projectRoot: task.projectRoot,
+          summary: message,
+        });
+      }
       queueRetrospector(task);
     }
   }
@@ -197,6 +206,13 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
     db.updateTask(task.id, { status: 'failed', error });
     emit(task, 'failed', { error, noRetry: true, ...(reason ? { reason } : {}) });
     logger.error({ taskId: task.id, error, reason }, 'task failed (no retry)');
+    if (error === 'cost_cap_exceeded') {
+      void alerts.notify('cost_cap_exceeded', {
+        taskId: task.id,
+        projectRoot: task.projectRoot,
+        summary: reason ?? error,
+      });
+    }
     queueRetrospector(task);
   }
 
@@ -283,13 +299,20 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 
     // Cost circuit breaker: checked up front, before every tool (canUseTool),
     // and on each result. Tripping fails the task with NO retry.
-    const cap = { tripped: false, reason: '' };
+    const cap = { tripped: false, reason: '', warned: false };
     const capExceeded = (): boolean => {
       if (cap.tripped) return true;
       const c = checkCostCaps(db, config, task.id, task.assignedAgent);
       if (c.exceeded) {
         cap.tripped = true;
         cap.reason = c.reason ?? 'cost cap exceeded';
+      } else if (c.warn && !cap.warned) {
+        cap.warned = true;
+        void alerts.notify('cost_cap_warning_80', {
+          taskId: task.id,
+          projectRoot: task.projectRoot,
+          summary: `~80% of a cost cap (task $${c.taskUsd.toFixed(4)}, agent/hr $${c.agentHourUsd.toFixed(4)})`,
+        });
       }
       return cap.tripped;
     };
@@ -460,6 +483,11 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
         });
         emit(task, 'blocked', { security_gate: gate.reason ?? null });
         logger.warn({ taskId: task.id, reason: gate.reason }, 'root task blocked by security gate');
+        void alerts.notify('security_blocking_finding', {
+          taskId: task.id,
+          projectRoot: task.projectRoot,
+          summary: gate.reason ?? 'blocking security finding',
+        });
         queueRetrospector(task);
         return;
       }
@@ -491,6 +519,13 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
         'retrospector complete; hot tier refreshed',
       );
     } else {
+      if (task.parentId === null) {
+        void alerts.notify('goal_completed', {
+          taskId: task.id,
+          projectRoot: task.projectRoot,
+          summary: task.title,
+        });
+      }
       queueRetrospector(task);
     }
   }

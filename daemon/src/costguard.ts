@@ -9,6 +9,7 @@ export interface CapCheck {
   reason?: string;
   taskUsd: number;
   agentHourUsd: number;
+  warn: boolean; // >= 80% of either cap, not yet exceeded
 }
 
 export function checkCostCaps(
@@ -35,6 +36,7 @@ export function checkCostCaps(
       reason: `per-task cost cap $${config.per_task_cap_usd} reached ($${taskUsd.toFixed(4)})`,
       taskUsd,
       agentHourUsd,
+      warn: true,
     };
   }
   if (agentHourUsd >= config.per_agent_hourly_cap) {
@@ -43,7 +45,10 @@ export function checkCostCaps(
       reason: `per-agent hourly cap $${config.per_agent_hourly_cap} reached for ${agent} ($${agentHourUsd.toFixed(4)})`,
       taskUsd,
       agentHourUsd,
+      warn: true,
     };
   }
-  return { exceeded: false, taskUsd, agentHourUsd };
+  const warn =
+    taskUsd >= 0.8 * config.per_task_cap_usd || agentHourUsd >= 0.8 * config.per_agent_hourly_cap;
+  return { exceeded: false, taskUsd, agentHourUsd, warn };
 }

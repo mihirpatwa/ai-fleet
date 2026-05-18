@@ -1,0 +1,10 @@
+# Keep the image build hermetic: install + build happen inside the container.
+**/node_modules
+**/dist
+**/.next
+.git
+**/coverage
+**/*.tsbuildinfo
+.aifleet
+deploy/.env
+**/.DS_Store

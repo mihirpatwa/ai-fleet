@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import pc from 'picocolors';
@@ -14,13 +15,11 @@ import {
 import { getJson, reachable, waitFor } from '../lib/http.js';
 import * as pm2 from '../lib/pm2.js';
 
-export async function up(): Promise<void> {
+async function ensureBuilt(): Promise<boolean> {
   if (!existsSync(paths.daemonEntry)) {
     console.error(pc.red(`daemon build missing: ${paths.daemonEntry}\nRun: pnpm -r build`));
-    process.exitCode = 1;
-    return;
+    return false;
   }
-
   if (!existsSync(join(paths.dashboardDir, '.next'))) {
     const s = ora('building dashboard (first run, ~30s)').start();
     try {
@@ -29,9 +28,68 @@ export async function up(): Promise<void> {
     } catch (err) {
       s.fail('dashboard build failed');
       console.error(err instanceof Error ? err.message : String(err));
-      process.exitCode = 1;
-      return;
+      return false;
     }
+  }
+  return true;
+}
+
+/**
+ * Foreground mode for systemd / `ExecStart`: run both processes as children,
+ * inherit stdio, block, and propagate SIGTERM/SIGINT so the supervisor can
+ * restart us. Exits non-zero if either child dies.
+ */
+async function foreground(): Promise<void> {
+  if (!(await ensureBuilt())) {
+    process.exitCode = 1;
+    return;
+  }
+  const children = [
+    spawn(process.execPath, [paths.daemonEntry, '--port', String(DAEMON_PORT)], {
+      cwd: fleetRoot,
+      stdio: 'inherit',
+    }),
+    spawn(process.execPath, [paths.nextBin, 'start', '-p', String(DASHBOARD_PORT)], {
+      cwd: paths.dashboardDir,
+      stdio: 'inherit',
+      env: { ...process.env, AIFLEET_DAEMON_URL: daemonUrl },
+    }),
+  ];
+  console.log(pc.bold(`ai-fleet up (foreground) — dashboard: ${dashboardUrl}`));
+
+  let stopping = false;
+  const stop = (signal: NodeJS.Signals): void => {
+    if (stopping) return;
+    stopping = true;
+    for (const c of children) c.kill(signal);
+    setTimeout(() => {
+      for (const c of children) c.kill('SIGKILL');
+      process.exit(0);
+    }, 10_000).unref();
+  };
+  process.on('SIGTERM', () => stop('SIGTERM'));
+  process.on('SIGINT', () => stop('SIGINT'));
+
+  await new Promise<void>((resolve) => {
+    for (const c of children) {
+      c.on('exit', (code, sig) => {
+        if (!stopping) {
+          console.error(pc.red(`child exited (code=${code} sig=${sig}); shutting down`));
+          process.exitCode = code ?? 1;
+          stop('SIGTERM');
+        }
+        resolve();
+      });
+    }
+  });
+}
+
+export async function up(opts: { foreground?: boolean } = {}): Promise<void> {
+  if (opts.foreground) return foreground();
+
+  if (!(await ensureBuilt())) {
+    process.exitCode = 1;
+    return;
   }
 
   const spin = ora('starting daemon + dashboard under pm2').start();

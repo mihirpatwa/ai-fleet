@@ -36,6 +36,25 @@ const memoryPolicy = z
   .strict()
   .default({ shadow_runs: 10 });
 
+// Phase-10 alerts. All destinations optional; dashboard_url builds the deep
+// link included in every alert.
+const alertsConfig = z
+  .object({
+    dashboard_url: z.string().default('http://localhost:3737'),
+    slack_webhook: z.string().optional(),
+    discord_webhook: z.string().optional(),
+    generic_post: z.string().optional(),
+    smtp: z
+      .object({
+        host: z.string(),
+        port: z.number().int().default(587),
+        from: z.string(),
+        to: z.string(),
+      })
+      .optional(),
+  })
+  .default({ dashboard_url: 'http://localhost:3737' });
+
 // `.strict()` is intentionally NOT used at the top level: an operator's
 // config.yaml may carry forward keys from a newer daemon, and an unknown key
 // should not crash startup. Nested policy objects stay strict.
@@ -53,6 +72,8 @@ export const fleetConfigSchema = z.object({
   // Phase-9 adaptive memory.
   embeddings_provider: z.string().default('off'),
   memory: memoryPolicy,
+  // Phase-10 alerts/webhooks.
+  alerts: alertsConfig,
   retry_policy: retryPolicy,
   log_level: z.enum(LOG_LEVELS).default('info'),
 });

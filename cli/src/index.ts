@@ -28,8 +28,9 @@ program
 
 program
   .command('up')
-  .description('start the daemon (7878) and dashboard (3737) under pm2')
-  .action(() => up());
+  .description('start the daemon (7878) and dashboard (3737)')
+  .option('--foreground', 'run in the foreground (systemd/ExecStart), no pm2')
+  .action((opts: { foreground?: boolean }) => up(opts));
 
 program
   .command('down')
@@ -44,10 +45,11 @@ program
 
 program
   .command('status')
-  .description("print the task tree for the current project's root")
+  .description('print the task tree for the current project (cwd by default)')
   .option('--watch', 'redraw every 2s')
   .option('--root <id>', 'limit to one root task')
-  .action((opts: { watch?: boolean; root?: string }) => status(opts));
+  .option('--all', 'show tasks across all projects, not just the cwd')
+  .action((opts: { watch?: boolean; root?: string; all?: boolean }) => status(opts));
 
 program
   .command('logs')

@@ -7,9 +7,11 @@
   "bin": {
     "ai-fleet": "dist/index.js"
   },
+  "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
+    "prepublishOnly": "pnpm -r build",
     "postinstall": "bash ../scripts/link-agents.sh 2>/dev/null || true"
   },
   "dependencies": {

@@ -3,12 +3,14 @@
 // the SQLite state layer, the scheduler and the HTTP/WS server together, then
 // blocks until a termination signal triggers a graceful drain.
 import { Command } from 'commander';
+import { createAlerts } from '../alerts.js';
 import { createAuditLog } from '../audit.js';
 import { createSessionTaskMap, FleetBus } from '../bus.js';
 import { aifleetDir, loadConfig, type FleetConfig } from '../config.js';
 import { createDb } from '../db.js';
 import { createLogger } from '../logger.js';
 import { createLoop } from '../loop.js';
+import { createScheduler } from '../scheduler.js';
 import { createServer } from '../server.js';
 import { createSpawner } from '../spawn.js';
 
@@ -38,9 +40,11 @@ async function main(flags: Flags): Promise<void> {
   const bus = new FleetBus();
   const sessionMap = createSessionTaskMap();
   const audit = createAuditLog(aifleetDir());
+  const alerts = createAlerts(config, logger);
 
-  const spawner = createSpawner({ db, config, bus, sessionMap, logger, audit });
+  const spawner = createSpawner({ db, config, bus, sessionMap, logger, audit, alerts });
   const loop = createLoop({ db, config, spawner, logger });
+  const scheduler = createScheduler({ db, logger });
   const server = await createServer({
     db,
     config,
@@ -52,6 +56,7 @@ async function main(flags: Flags): Promise<void> {
 
   await server.listen({ port: config.server_port, host: '127.0.0.1' });
   loop.start();
+  scheduler.start();
   logger.info(
     { port: config.server_port, db: db.path, logFile },
     `aifleet-daemon up — http://127.0.0.1:${config.server_port}`,
@@ -65,6 +70,7 @@ async function main(flags: Flags): Promise<void> {
     // Stop scheduling → drain in-flight runs → stop serving → close DB → flush logs.
     void (async () => {
       try {
+        scheduler.stop();
         await loop.stop();
         await server.close();
         db.close();
