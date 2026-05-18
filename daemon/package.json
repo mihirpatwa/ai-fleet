@@ -4,9 +4,26 @@
   "private": true,
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "aifleet-db": "dist/cli/db.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "db": "node dist/cli/db.js",
+    "db:dev": "tsx src/cli/db.ts"
   },
-  "dependencies": {}
+  "dependencies": {
+    "better-sqlite3": "^12.10.0",
+    "commander": "^14.0.3",
+    "picocolors": "^1.1.1",
+    "ulid": "^3.0.2",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.19.19",
+    "tsx": "^4.22.1",
+    "vitest": "^2.1.9"
+  }
 }
