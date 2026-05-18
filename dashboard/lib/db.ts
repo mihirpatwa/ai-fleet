@@ -12,6 +12,7 @@ import type {
   AgentSummary,
   CostRow,
   FleetEvent,
+  Memory,
   SecurityFinding,
   Severity,
   Task,
@@ -430,5 +431,84 @@ export function securityFindings(project?: string): SecurityFinding[] {
   }
   return out.sort(
     (a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity] || b.ts.localeCompare(a.ts),
+  );
+}
+
+function mapMemory(r: Record<string, unknown>): Memory {
+  return {
+    id: String(r['id']),
+    projectRoot: String(r['projectRoot']),
+    agent: (r['agent'] as string) ?? null,
+    tags: (json(r['tags']) as string[]) ?? [],
+    context: (r['context'] as string) ?? null,
+    lesson: json(r['lessonJson']),
+    confidence: Number(r['confidence'] ?? 0),
+    usedCount: Number(r['usedCount'] ?? 0),
+    lastUsedAt: (r['lastUsedAt'] as string) ?? null,
+    createdAt: String(r['createdAt']),
+    pinned: Number(r['pinned'] ?? 0) === 1,
+  };
+}
+
+export interface MemoryFilter {
+  project?: string;
+  agent?: string;
+  tag?: string;
+  sort?: 'confidence' | 'used' | 'recent';
+  dir?: 'asc' | 'desc';
+}
+
+export function listMemoriesDash(f: MemoryFilter = {}): Memory[] {
+  return safe((d) => {
+    const where: string[] = [];
+    const args: unknown[] = [];
+    if (f.project) {
+      where.push('project_root = ?');
+      args.push(f.project);
+    }
+    if (f.agent) {
+      where.push('agent = ?');
+      args.push(f.agent);
+    }
+    const col =
+      f.sort === 'used' ? 'used_count' : f.sort === 'recent' ? 'created_at' : 'confidence';
+    const dir = f.dir === 'asc' ? 'ASC' : 'DESC';
+    const order = col === 'created_at' ? `datetime(created_at) ${dir}` : `${col} ${dir}`;
+    const rows = d
+      .prepare(
+        `SELECT id, project_root AS projectRoot, agent, tags, context,
+                lesson_json AS lessonJson, confidence, used_count AS usedCount,
+                last_used_at AS lastUsedAt, created_at AS createdAt, pinned
+           FROM memories ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+           ORDER BY pinned DESC, ${order} LIMIT 500`,
+      )
+      .all(...args) as Record<string, unknown>[];
+    const tag = f.tag?.toLowerCase();
+    const mapped = rows.map(mapMemory);
+    return tag ? mapped.filter((m) => m.tags.some((t) => t.toLowerCase() === tag)) : mapped;
+  }, []);
+}
+
+export function memoryProjects(): string[] {
+  return safe(
+    (d) =>
+      (
+        d.prepare('SELECT DISTINCT project_root AS p FROM memories ORDER BY p').all() as {
+          p: string;
+        }[]
+      ).map((r) => r.p),
+    [],
+  );
+}
+
+export function memoryAgents(): string[] {
+  return safe(
+    (d) =>
+      (
+        d
+          .prepare('SELECT DISTINCT agent AS a FROM memories WHERE agent IS NOT NULL ORDER BY a')
+          .all() as { a: string }[]
+      ).map((r) => r.a),
+    [],
   );
 }

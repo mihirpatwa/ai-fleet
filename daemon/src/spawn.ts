@@ -22,6 +22,8 @@ import type { FleetDb, Json, Task } from './db.js';
 import { recordAndBroadcast } from './events.js';
 import { computeCost } from './pricing.js';
 import { checkCostCaps } from './costguard.js';
+import { createMemoryMcp } from './mcp/memory.js';
+import { completedRetrospectorRuns, regenerateHotTier } from './memory.js';
 import {
   INJECTION_SUFFIX,
   buildPrompt,
@@ -186,6 +188,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
       db.updateTask(task.id, { status: 'failed', error: message });
       logger.error({ taskId: task.id, attempt, max }, 'agent run failed; retries exhausted');
       emit(task, 'failed', { error: message, retries: attempt });
+      queueRetrospector(task);
     }
   }
 
@@ -194,6 +197,53 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
     db.updateTask(task.id, { status: 'failed', error });
     emit(task, 'failed', { error, noRetry: true, ...(reason ? { reason } : {}) });
     logger.error({ taskId: task.id, error, reason }, 'task failed (no retry)');
+    queueRetrospector(task);
+  }
+
+  /**
+   * When a ROOT task reaches a terminal state, queue a one-shot retrospector
+   * child (the orchestrator is also prompted to, but the daemon guarantees it
+   * for direct submissions too). The retrospector only has Read + memory.add,
+   * so the tree's log + outputs are passed to it via input_json.
+   */
+  function queueRetrospector(task: Task): void {
+    if (task.parentId !== null || task.assignedAgent === 'retrospector') return;
+    const tree = db.getTaskTree(task.rootId);
+    if (tree.some((t) => t.assignedAgent === 'retrospector')) return; // once per tree
+    const tasksSummary = tree.map((t) => ({
+      id: t.id,
+      agent: t.assignedAgent,
+      status: t.status,
+      title: t.title,
+      output: t.outputJson ?? null,
+    }));
+    const events: Json[] = [];
+    for (const t of tree) {
+      for (const e of db.listEvents({ taskId: t.id, order: 'asc', limit: 60 })) {
+        events.push({
+          task: e.taskId,
+          agent: e.agent,
+          type: e.type,
+          ts: e.ts,
+          payload: e.payloadJson,
+        });
+      }
+    }
+    db.createTask({
+      projectRoot: task.projectRoot,
+      parentId: task.id,
+      title: `retrospect: ${task.title.slice(0, 80)}`,
+      assignedAgent: 'retrospector',
+      inputJson: {
+        project_root: task.projectRoot,
+        root_id: task.rootId,
+        goal: task.title,
+        final_status: db.getTask(task.id)?.status ?? task.status,
+        tasks: tasksSummary as Json,
+        events: events.slice(-300),
+      },
+    });
+    logger.info({ taskId: task.id, rootId: task.rootId }, 'queued retrospector for terminal root');
   }
 
   async function spawnAgent(task: Task): Promise<void> {
@@ -254,12 +304,24 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
     emit(task, 'started', { agent: task.assignedAgent, model });
     logger.info({ taskId: task.id, agent: task.assignedAgent, model }, 'spawning agent');
 
+    // Adaptive memory: shadow window is per-project (first N retrospect runs).
+    const priorRetro = completedRetrospectorRuns(db, task.projectRoot);
+    const shadowRemaining = Math.max(0, config.memory.shadow_runs - priorRetro);
+    const MEM_TOOLS = [
+      'mcp__memory__search',
+      'mcp__memory__add',
+      'mcp__memory__list',
+      'mcp__memory__pin',
+    ];
+
     const def: AgentDefinition = {
       description: parsed.description,
       // Prompt-injection mitigation: every spawned agent carries the suffix.
       prompt: parsed.prompt + INJECTION_SUFFIX,
       model,
-      ...(parsed.tools ? { tools: parsed.tools } : {}),
+      // When the agent restricts tools, the memory MCP tools must be allowed
+      // too or the SDK hides them.
+      ...(parsed.tools ? { tools: [...new Set([...parsed.tools, ...MEM_TOOLS])] } : {}),
     };
 
     const canUseTool = async (
@@ -298,7 +360,22 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
       agents: { [task.assignedAgent]: def },
       model,
       settingSources: ['user'],
-      env: { ...process.env, AIFLEET_TASK_ID: task.id },
+      env: {
+        ...process.env,
+        AIFLEET_TASK_ID: task.id,
+        AIFLEET_CALLER_AGENT: task.assignedAgent,
+      },
+      // Adaptive memory exposed to every agent; the server is built per-spawn
+      // so memory.add/pin are caller-enforced via closure (not a shared env).
+      mcpServers: {
+        memory: createMemoryMcp({
+          db,
+          agent: task.assignedAgent,
+          projectRoot: task.projectRoot,
+          taskId: task.id,
+          shadow: shadowRemaining > 0,
+        }),
+      },
       // No bypassPermissions: canUseTool mediates EVERY tool call (sandbox +
       // network egress + audit). Returning allow is the headless approval.
       canUseTool,
@@ -383,6 +460,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
         });
         emit(task, 'blocked', { security_gate: gate.reason ?? null });
         logger.warn({ taskId: task.id, reason: gate.reason }, 'root task blocked by security gate');
+        queueRetrospector(task);
         return;
       }
     }
@@ -394,6 +472,27 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
     });
     emit(task, 'completed', output ?? { note: 'no structured output parsed' });
     logger.info({ taskId: task.id, agent: task.assignedAgent }, 'agent run complete');
+
+    if (task.assignedAgent === 'retrospector') {
+      // The retrospector just recorded lessons — refresh the project's hot
+      // tier (no-op while the project is still inside its shadow window).
+      const remaining = Math.max(
+        0,
+        config.memory.shadow_runs - completedRetrospectorRuns(db, task.projectRoot),
+      );
+      const wrote = regenerateHotTier(db, task.projectRoot, { shadowRemaining: remaining });
+      logger.info(
+        {
+          taskId: task.id,
+          project: task.projectRoot,
+          hotTierWritten: wrote,
+          shadowRemaining: remaining,
+        },
+        'retrospector complete; hot tier refreshed',
+      );
+    } else {
+      queueRetrospector(task);
+    }
   }
 
   return {

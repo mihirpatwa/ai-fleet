@@ -27,6 +27,15 @@ const retryPolicy = z
   .strict()
   .default({ max_retries: 3, backoff_ms: [5000, 30000, 300000] });
 
+// Shadow-mode safety rail: the first N retrospect runs per project store
+// lessons at low confidence and are kept out of the CLAUDE.md hot tier.
+const memoryPolicy = z
+  .object({
+    shadow_runs: z.number().int().min(0).default(10),
+  })
+  .strict()
+  .default({ shadow_runs: 10 });
+
 // `.strict()` is intentionally NOT used at the top level: an operator's
 // config.yaml may carry forward keys from a newer daemon, and an unknown key
 // should not crash startup. Nested policy objects stay strict.
@@ -41,6 +50,9 @@ export const fleetConfigSchema = z.object({
   // Phase-8 circuit breakers (per-agent/hour + per-task absolute).
   per_agent_hourly_cap: z.number().min(0).default(0.5),
   per_task_cap_usd: z.number().min(0).default(1.0),
+  // Phase-9 adaptive memory.
+  embeddings_provider: z.string().default('off'),
+  memory: memoryPolicy,
   retry_policy: retryPolicy,
   log_level: z.enum(LOG_LEVELS).default('info'),
 });

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { rmSync } from 'node:fs';
+import { readdirSync, rmSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { ulid } from 'ulid';
 import { createDb, type FleetDb } from '../src/db.js';
 
@@ -14,11 +15,15 @@ function mem(): FleetDb {
 
 describe('db state layer', () => {
   it('runs migrations once and is idempotent (memory + file, fresh connection)', () => {
+    // Don't hardcode the migration count — it grows each schema phase.
+    const migCount = readdirSync(
+      fileURLToPath(new URL('../../migrations', import.meta.url)),
+    ).filter((f) => f.endsWith('.sql')).length;
     const db = mem();
     expect(db.migrate().applied).toEqual([]); // createDb already applied them
     expect(
       (db.raw.prepare('SELECT COUNT(*) AS c FROM schema_migrations').get() as { c: number }).c,
-    ).toBe(1);
+    ).toBe(migCount);
     db.close();
 
     const file = join(tmpdir(), `aifleet-test-${ulid()}.db`);
@@ -30,7 +35,7 @@ describe('db state layer', () => {
       expect(d2.migrate().applied).toEqual([]);
       expect(
         (d2.raw.prepare('SELECT COUNT(*) AS c FROM schema_migrations').get() as { c: number }).c,
-      ).toBe(1);
+      ).toBe(migCount);
       d2.close();
     } finally {
       for (const ext of ['', '-wal', '-shm']) rmSync(file + ext, { force: true });
@@ -85,9 +90,7 @@ describe('db state layer', () => {
   it('zod rejects malformed input', () => {
     const db = mem();
     // empty title
-    expect(() =>
-      db.createTask({ projectRoot: '/p', title: '', assignedAgent: 'coder' }),
-    ).toThrow();
+    expect(() => db.createTask({ projectRoot: '/p', title: '', assignedAgent: 'coder' })).toThrow();
     // non-JSON value in input_json
     expect(() =>
       db.createTask({

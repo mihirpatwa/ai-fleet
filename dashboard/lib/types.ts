@@ -99,6 +99,20 @@ export interface CostRow {
   cacheReadTokens: number;
 }
 
+export interface Memory {
+  id: string;
+  projectRoot: string;
+  agent: string | null;
+  tags: string[];
+  context: string | null;
+  lesson: unknown;
+  confidence: number;
+  usedCount: number;
+  lastUsedAt: string | null;
+  createdAt: string;
+  pinned: boolean;
+}
+
 export type Severity = 'low' | 'med' | 'high' | 'critical';
 
 export interface SecurityFinding {

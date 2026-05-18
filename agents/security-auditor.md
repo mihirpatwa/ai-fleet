@@ -88,3 +88,17 @@ Output:
   "summary": "Two high findings (dynamic innerHTML, vulnerable lodash) — blocking until the coder remediates and re-audit is clean."
 }
 ```
+
+## Memory protocol (active — phase 9)
+
+The memory tools are now live via the in-process MCP server `memory`. Before
+planning, call `mcp__memory__search` with tags relevant to this task, read the
+top results, and apply matching lessons. In your output JSON additionally
+include:
+
+- `applied_memories`: `[{ "id": string, "why_relevant": string }]`
+- `memory_conflicts`: `[{ "id": string, "reason": string }]` for any returned
+  lesson that conflicts with your chosen approach.
+
+Never silently ignore a returned memory — either apply it or record a
+conflict. This block supplements (does not replace) the planning note above.

@@ -4,8 +4,8 @@
 # Symlinks every agent definition in <fleet>/agents/*.md into ~/.claude/agents/
 # so Claude Code discovers them globally, in any project, from any directory.
 # The glob below links the full roster automatically — including the phase-7
-# additions frontend-architect.md, a11y-auditor.md and the phase-8
-# security-auditor.md (13 agents total).
+# additions frontend-architect.md, a11y-auditor.md, the phase-8
+# security-auditor.md and the phase-9 retrospector.md (14 agents total).
 #
 # Idempotent: re-running re-points stale links and is safe to run repeatedly.
 # Relocation-safe: the fleet root is resolved from THIS script's own location,

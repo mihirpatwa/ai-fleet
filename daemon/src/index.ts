@@ -13,6 +13,8 @@ export * from './sandbox.js';
 export * from './audit.js';
 export * from './costguard.js';
 export * from './security.js';
+export * from './memory.js';
+export * from './mcp/memory.js';
 export * from './spawn.js';
 export * from './loop.js';
 export * from './server.js';

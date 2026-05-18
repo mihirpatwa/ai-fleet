@@ -1,7 +1,19 @@
 #!/usr/bin/env node
+import { readFileSync, writeFileSync } from 'node:fs';
 import { Command } from 'commander';
 import pc from 'picocolors';
 import { createDb, tsMsAgo, type FleetEvent, type Task } from '../db.js';
+import { loadConfig } from '../config.js';
+import {
+  compact as memoryCompact,
+  completedRetrospectorRuns,
+  exportMemories,
+  getMemory,
+  importMemories,
+  listMemories,
+  regenerateHotTier,
+  type Memory,
+} from '../memory.js';
 
 function statusColor(s: string): string {
   switch (s) {
@@ -203,6 +215,113 @@ program
           r.applied.length ? r.applied.join(', ') : '0 migrations'
         }`,
       );
+    } finally {
+      db.close();
+    }
+  });
+
+const memory = program.command('memory').description('adaptive memory store');
+
+memory
+  .command('list')
+  .description('list memories')
+  .option('--project <path>')
+  .option('--agent <agent>')
+  .option('--tags <csv>', 'comma-separated tags to filter by')
+  .option('--limit <n>', '', '20')
+  .action((o: { project?: string; agent?: string; tags?: string; limit: string }) => {
+    const db = createDb();
+    try {
+      const wantTags = (o.tags ?? '')
+        .split(',')
+        .map((t) => t.trim().toLowerCase())
+        .filter(Boolean);
+      let rows = listMemories(db, {
+        ...(o.project ? { projectRoot: o.project } : {}),
+        ...(o.agent ? { agent: o.agent } : {}),
+        limit: Number(o.limit),
+      });
+      if (wantTags.length) {
+        rows = rows.filter((m) => m.tags.some((t) => wantTags.includes(t.toLowerCase())));
+      }
+      if (rows.length === 0) return console.log('no memories');
+      for (const m of rows) {
+        console.log(
+          `${pc.dim(m.id)}  ${pc.green(m.confidence.toFixed(2))}  u${m.usedCount}` +
+            `${m.pinned ? pc.yellow(' 📌') : ''}  ${pc.cyan(m.agent ?? '-')}  ` +
+            `${pc.dim(`[${m.tags.join(',')}]`)}  ${m.context ?? ''}`,
+        );
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+memory
+  .command('show')
+  .description('show one memory')
+  .argument('<id>')
+  .action((id: string) => {
+    const db = createDb();
+    try {
+      const m = getMemory(db, id);
+      if (!m) {
+        console.error('not found');
+        process.exit(1);
+      }
+      console.log(JSON.stringify(m, null, 2));
+    } finally {
+      db.close();
+    }
+  });
+
+memory
+  .command('compact')
+  .description('merge duplicates, decay, prune, regenerate hot tiers')
+  .action(() => {
+    const db = createDb();
+    try {
+      const cfg = loadConfig();
+      const r = memoryCompact(db);
+      for (const proj of r.projects) {
+        const remaining = Math.max(0, cfg.memory.shadow_runs - completedRetrospectorRuns(db, proj));
+        regenerateHotTier(db, proj, { shadowRemaining: remaining });
+      }
+      console.log(
+        `compacted: merged ${r.merged}, decayed ${r.decayed}, pruned ${r.pruned}; ` +
+          `hot tier regenerated for ${r.projects.length} project(s)`,
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+memory
+  .command('export')
+  .description('export memories to JSON')
+  .argument('<out.json>')
+  .option('--project <path>')
+  .action((out: string, o: { project?: string }) => {
+    const db = createDb();
+    try {
+      const rows = exportMemories(db, o.project);
+      writeFileSync(out, JSON.stringify(rows, null, 2));
+      console.log(`exported ${rows.length} memory(ies) -> ${out}`);
+    } finally {
+      db.close();
+    }
+  });
+
+memory
+  .command('import')
+  .description('merge a memory export into the store')
+  .argument('<in.json>')
+  .action((inp: string) => {
+    const db = createDb();
+    try {
+      const items = JSON.parse(readFileSync(inp, 'utf8')) as Memory[];
+      const r = importMemories(db, items);
+      console.log(`imported ${r.imported} new, merged ${r.merged} existing`);
     } finally {
       db.close();
     }

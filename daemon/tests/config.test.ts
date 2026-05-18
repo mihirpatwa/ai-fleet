@@ -17,6 +17,8 @@ describe('config', () => {
     expect(c.cost_cap_per_hour_usd).toBe(5.0);
     expect(c.per_agent_hourly_cap).toBe(0.5);
     expect(c.per_task_cap_usd).toBe(1.0);
+    expect(c.embeddings_provider).toBe('off');
+    expect(c.memory).toEqual({ shadow_runs: 10 });
     expect(c.retry_policy).toEqual({ max_retries: 3, backoff_ms: [5000, 30000, 300000] });
     expect(c.log_level).toBe('info');
   });

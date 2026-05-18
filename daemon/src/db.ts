@@ -346,7 +346,9 @@ export function createDb(opts: { path?: string } = {}): FleetDb {
     resetSchema: () => {
       db.pragma('foreign_keys = OFF');
       db.exec(
-        `DROP TABLE IF EXISTS events;
+        `DROP TABLE IF EXISTS memories_fts;
+         DROP TABLE IF EXISTS memories;
+         DROP TABLE IF EXISTS events;
          DROP TABLE IF EXISTS messages;
          DROP TABLE IF EXISTS agent_runs;
          DROP TABLE IF EXISTS tasks;

@@ -9,6 +9,7 @@ import type { FleetBus, SessionTaskMap } from './bus.js';
 import type { FleetConfig } from './config.js';
 import { EVENT_TYPES, TASK_STATUSES, tsMsAgo, type FleetDb, type TaskStatus } from './db.js';
 import { recordAndBroadcast } from './events.js';
+import { deleteMemory, getMemory, listMemories, pinMemory, updateLesson } from './memory.js';
 
 export interface ServerDeps {
   db: FleetDb;
@@ -186,6 +187,52 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     });
     logger.info({ taskId: task.id }, 'task retried via API');
     return updated;
+  });
+
+  // Phase-9 memory surface (dashboard reads + per-row actions).
+  app.get('/memory', (req) => {
+    const q = (req.query ?? {}) as Record<string, string | undefined>;
+    return listMemories(db, {
+      ...(q['project_root'] ? { projectRoot: q['project_root'] } : {}),
+      ...(q['agent'] ? { agent: q['agent'] } : {}),
+      limit: q['limit'] ? Number(q['limit']) : 200,
+    });
+  });
+
+  app.post<{ Params: { id: string } }>('/memory/:id/pin', (req, reply) => {
+    const m = getMemory(db, req.params.id);
+    if (!m) {
+      void reply.code(404);
+      return { error: 'memory not found' };
+    }
+    const body = (req.body ?? {}) as { pinned?: unknown };
+    pinMemory(db, req.params.id, body.pinned === true);
+    return getMemory(db, req.params.id);
+  });
+
+  app.patch<{ Params: { id: string } }>('/memory/:id', (req, reply) => {
+    const m = getMemory(db, req.params.id);
+    if (!m) {
+      void reply.code(404);
+      return { error: 'memory not found' };
+    }
+    const body = (req.body ?? {}) as { lesson?: unknown };
+    if (body.lesson === undefined) {
+      void reply.code(400);
+      return { error: 'body.lesson required' };
+    }
+    updateLesson(db, req.params.id, body.lesson);
+    return getMemory(db, req.params.id);
+  });
+
+  app.delete<{ Params: { id: string } }>('/memory/:id', (req, reply) => {
+    const m = getMemory(db, req.params.id);
+    if (!m) {
+      void reply.code(404);
+      return { error: 'memory not found' };
+    }
+    deleteMemory(db, req.params.id);
+    return { ok: true, id: req.params.id };
   });
 
   app.get('/events', (req) => {

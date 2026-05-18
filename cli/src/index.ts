@@ -11,6 +11,7 @@ import { logs } from './commands/logs.js';
 import { cost } from './commands/cost.js';
 import { stop } from './commands/stop.js';
 import { doctor } from './commands/doctor.js';
+import { memory } from './commands/memory.js';
 
 const program = new Command();
 program
@@ -73,6 +74,41 @@ program
   .command('doctor')
   .description('check the environment; exits non-zero if any check fails')
   .action(() => doctor());
+
+const mem = program.command('memory').description('inspect & maintain the adaptive memory store');
+mem
+  .command('list')
+  .description('list memories')
+  .option('--agent <agent>')
+  .option('--tags <a,b>')
+  .option('--project <path>')
+  .action((o: { agent?: string; tags?: string; project?: string }) =>
+    memory([
+      'list',
+      ...(o.agent ? ['--agent', o.agent] : []),
+      ...(o.tags ? ['--tags', o.tags] : []),
+      ...(o.project ? ['--project', o.project] : []),
+    ]),
+  );
+mem
+  .command('show <id>')
+  .description('show one memory as JSON')
+  .action((id: string) => memory(['show', id]));
+mem
+  .command('compact')
+  .description('merge duplicates, decay, prune, regenerate hot tiers')
+  .action(() => memory(['compact']));
+mem
+  .command('export <out.json>')
+  .description('export memories for sharing')
+  .option('--project <path>')
+  .action((out: string, o: { project?: string }) =>
+    memory(['export', out, ...(o.project ? ['--project', o.project] : [])]),
+  );
+mem
+  .command('import <in.json>')
+  .description('merge a memory export into the store')
+  .action((inp: string) => memory(['import', inp]));
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));
