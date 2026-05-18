@@ -38,6 +38,9 @@ export const fleetConfigSchema = z.object({
   orchestrator_model: z.string().min(1).default('claude-opus-4-7'),
   per_agent_models: z.record(z.string(), z.string()).default({}),
   cost_cap_per_hour_usd: z.number().min(0).default(5.0),
+  // Phase-8 circuit breakers (per-agent/hour + per-task absolute).
+  per_agent_hourly_cap: z.number().min(0).default(0.5),
+  per_task_cap_usd: z.number().min(0).default(1.0),
   retry_policy: retryPolicy,
   log_level: z.enum(LOG_LEVELS).default('info'),
 });

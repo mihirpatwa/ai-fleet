@@ -18,7 +18,7 @@ interface Result {
   ok: boolean;
   detail: string;
 }
-type Check = { name: string; run: () => Promise<Result> };
+type Check = { name: string; section?: string; run: () => Promise<Result> };
 
 function canWrite(p: string): boolean {
   try {
@@ -123,11 +123,52 @@ const checks: Check[] = [
       }
     },
   },
+  {
+    name: 'security-auditor linked',
+    section: 'security',
+    run: async () => {
+      const link = join(paths.claudeAgentsDir, 'security-auditor.md');
+      const src = join(paths.agentsDir, 'security-auditor.md');
+      try {
+        return realpathSync(link) === realpathSync(src)
+          ? { ok: true, detail: 'security-auditor agent is linked globally' }
+          : { ok: false, detail: 'security-auditor.md not linked — run scripts/link-agents.sh' };
+      } catch {
+        return { ok: false, detail: 'security-auditor.md not linked — run scripts/link-agents.sh' };
+      }
+    },
+  },
+  {
+    name: 'require_security_pass',
+    section: 'security',
+    run: async () => {
+      const cfg = join(process.cwd(), '.aifleet.yaml');
+      if (!existsSync(cfg)) return { ok: true, detail: 'no .aifleet.yaml here (gate defaults on)' };
+      const txt = readFileSync(cfg, 'utf8');
+      return /require_security_pass:\s*false/.test(txt)
+        ? { ok: true, detail: 'explicitly disabled for this project (operator choice)' }
+        : { ok: true, detail: 'security gate enabled' };
+    },
+  },
+  {
+    name: 'audit log writable',
+    section: 'security',
+    run: async () =>
+      canWrite(existsSync(paths.aifleetHome) ? paths.aifleetHome : dirname(paths.aifleetHome))
+        ? { ok: true, detail: `${paths.aifleetHome}/audit.log` }
+        : { ok: false, detail: `cannot write the audit log under ${paths.aifleetHome}` },
+  },
 ];
 
 export async function doctor(): Promise<void> {
   let failed = 0;
+  let section = '';
   for (const c of checks) {
+    const s = c.section ?? 'environment';
+    if (s !== section) {
+      section = s;
+      console.log(pc.bold(`\n[${s}]`));
+    }
     const r = await c.run().catch((e: unknown) => ({
       ok: false,
       detail: e instanceof Error ? e.message : String(e),

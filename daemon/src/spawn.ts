@@ -3,22 +3,34 @@
 // agent, the SDK stream is mirrored into the events table, token usage is
 // priced into agent_runs, and the final fenced-JSON message is parsed into
 // the task's output_json. Failures retry with the configured backoff.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   query,
   type AgentDefinition,
   type Options,
+  type PermissionResult,
   type Query,
 } from '@anthropic-ai/claude-agent-sdk';
 import yaml from 'js-yaml';
 import type { Logger } from 'pino';
+import type { AuditLog } from './audit.js';
 import type { FleetBus, SessionTaskMap } from './bus.js';
 import type { FleetConfig } from './config.js';
 import type { FleetDb, Json, Task } from './db.js';
 import { recordAndBroadcast } from './events.js';
 import { computeCost } from './pricing.js';
+import { checkCostCaps } from './costguard.js';
+import {
+  INJECTION_SUFFIX,
+  buildPrompt,
+  decideTool,
+  readProjectPolicy,
+  workDir,
+  type SandboxContext,
+} from './sandbox.js';
+import { unresolvedSecurityBlock } from './security.js';
 import { nowTs } from './time.js';
 
 /** `~/.claude/agents` by default; `AIFLEET_AGENTS_DIR` redirects it (tests, smoke). */
@@ -112,6 +124,7 @@ export interface SpawnerDeps {
   bus: FleetBus;
   sessionMap: SessionTaskMap;
   logger: Logger;
+  audit: AuditLog;
 }
 
 export interface Spawner {
@@ -124,13 +137,13 @@ export interface Spawner {
 }
 
 export function createSpawner(deps: SpawnerDeps): Spawner {
-  const { db, config, bus, sessionMap, logger } = deps;
+  const { db, config, bus, sessionMap, logger, audit } = deps;
   const live = new Map<string, Query>();
   const retryTimers = new Map<string, NodeJS.Timeout>();
 
   function emit(
     task: Task,
-    type: 'started' | 'log' | 'tool_use_pre' | 'completed' | 'failed',
+    type: 'started' | 'log' | 'tool_use_pre' | 'completed' | 'failed' | 'blocked',
     payload: Json,
   ): void {
     recordAndBroadcast(db, bus, {
@@ -176,6 +189,13 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
     }
   }
 
+  /** Terminal failure with NO retry (cost caps, hard policy). */
+  function failNoRetry(task: Task, error: string, reason?: string): void {
+    db.updateTask(task.id, { status: 'failed', error });
+    emit(task, 'failed', { error, noRetry: true, ...(reason ? { reason } : {}) });
+    logger.error({ taskId: task.id, error, reason }, 'task failed (no retry)');
+  }
+
   async function spawnAgent(task: Task): Promise<void> {
     const file = agentPath(task.assignedAgent);
     if (!existsSync(file)) {
@@ -192,6 +212,42 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
     }
 
     const model = resolveModel(config, task.assignedAgent);
+    const wdir = workDir(task.id);
+    try {
+      mkdirSync(wdir, { recursive: true });
+    } catch {
+      /* best effort */
+    }
+    const inputObj: Record<string, unknown> =
+      task.inputJson && typeof task.inputJson === 'object' && !Array.isArray(task.inputJson)
+        ? (task.inputJson as Record<string, unknown>)
+        : {};
+    const ctx: SandboxContext = {
+      taskId: task.id,
+      agent: task.assignedAgent,
+      projectRoot: task.projectRoot,
+      workDir: wdir,
+      allowEnvRead: inputObj['allow_env_read'] === true,
+      allowNetwork: task.assignedAgent === 'researcher' || inputObj['allow_network'] === true,
+    };
+
+    // Cost circuit breaker: checked up front, before every tool (canUseTool),
+    // and on each result. Tripping fails the task with NO retry.
+    const cap = { tripped: false, reason: '' };
+    const capExceeded = (): boolean => {
+      if (cap.tripped) return true;
+      const c = checkCostCaps(db, config, task.id, task.assignedAgent);
+      if (c.exceeded) {
+        cap.tripped = true;
+        cap.reason = c.reason ?? 'cost cap exceeded';
+      }
+      return cap.tripped;
+    };
+    if (capExceeded()) {
+      failNoRetry(task, 'cost_cap_exceeded', cap.reason);
+      return;
+    }
+
     db.updateTask(task.id, { status: 'running' }); // auto-stamps started_at
     const started = db.getTask(task.id);
     const startedAt = started?.startedAt ?? nowTs();
@@ -200,10 +256,41 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 
     const def: AgentDefinition = {
       description: parsed.description,
-      prompt: parsed.prompt,
+      // Prompt-injection mitigation: every spawned agent carries the suffix.
+      prompt: parsed.prompt + INJECTION_SUFFIX,
       model,
       ...(parsed.tools ? { tools: parsed.tools } : {}),
     };
+
+    const canUseTool = async (
+      toolName: string,
+      input: Record<string, unknown>,
+    ): Promise<PermissionResult> => {
+      if (capExceeded()) {
+        audit.record({
+          task_id: task.id,
+          agent: task.assignedAgent,
+          tool: toolName,
+          target: '-',
+          allowed: false,
+          denied_reason: 'cost_cap_exceeded',
+        });
+        return { behavior: 'deny', message: 'cost_cap_exceeded', interrupt: true };
+      }
+      const d = decideTool(ctx, toolName, input);
+      audit.record({
+        task_id: task.id,
+        agent: task.assignedAgent,
+        tool: toolName,
+        target: d.target,
+        allowed: d.allowed,
+        ...(d.reason ? { denied_reason: d.reason } : {}),
+      });
+      if (d.allowed) return { behavior: 'allow', updatedInput: input };
+      emit(task, 'log', { sandbox_denied: toolName, reason: d.reason ?? null, target: d.target });
+      return { behavior: 'deny', message: `sandbox: ${d.reason}` };
+    };
+
     const options: Options = {
       cwd: task.projectRoot,
       // Run the main thread AS this agent (applies its prompt + tool scope).
@@ -212,16 +299,18 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
       model,
       settingSources: ['user'],
       env: { ...process.env, AIFLEET_TASK_ID: task.id },
-      // Headless daemon: no human is present to answer permission prompts.
-      permissionMode: 'bypassPermissions',
-      allowDangerouslySkipPermissions: true,
+      // No bypassPermissions: canUseTool mediates EVERY tool call (sandbox +
+      // network egress + audit). Returning allow is the headless approval.
+      canUseTool,
+      ...(ctx.allowNetwork ? {} : { disallowedTools: ['WebSearch', 'WebFetch'] }),
     };
 
     let finalText = '';
-    const q = query({ prompt: JSON.stringify(task.inputJson ?? {}), options });
+    const q = query({ prompt: buildPrompt(task.inputJson ?? {}), options });
     live.set(task.id, q);
     try {
       for await (const msg of q) {
+        if (cap.tripped) break;
         if (msg.type === 'system' && msg.subtype === 'init') {
           sessionMap.set(msg.session_id, task.id);
         } else if (msg.type === 'assistant') {
@@ -260,6 +349,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
             const detail = msg.errors.join('; ') || msg.subtype;
             throw new Error(`agent run ${msg.subtype}: ${detail}`);
           }
+          if (capExceeded()) break;
         }
       }
     } catch (err) {
@@ -269,7 +359,34 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
     }
     live.delete(task.id);
 
+    if (cap.tripped) {
+      try {
+        await q.interrupt();
+      } catch {
+        /* already ended */
+      }
+      failNoRetry(task, 'cost_cap_exceeded', cap.reason);
+      return;
+    }
+
     const output = parseAgentJson(finalText);
+
+    // Pre-completion security gate: a root task cannot transition to done
+    // while the project requires a pass and a blocking finding is unresolved.
+    if (task.parentId === null && readProjectPolicy(task.projectRoot).requireSecurityPass) {
+      const gate = unresolvedSecurityBlock(db, task.rootId);
+      if (gate.blocked) {
+        db.updateTask(task.id, {
+          status: 'blocked',
+          error: `security gate: ${gate.reason}`,
+          ...(output !== undefined ? { outputJson: output } : {}),
+        });
+        emit(task, 'blocked', { security_gate: gate.reason ?? null });
+        logger.warn({ taskId: task.id, reason: gate.reason }, 'root task blocked by security gate');
+        return;
+      }
+    }
+
     db.updateTask(task.id, {
       status: 'done',
       progress: 100,

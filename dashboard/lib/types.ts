@@ -98,3 +98,19 @@ export interface CostRow {
   outputTokens: number;
   cacheReadTokens: number;
 }
+
+export type Severity = 'low' | 'med' | 'high' | 'critical';
+
+export interface SecurityFinding {
+  taskId: string;
+  projectRoot: string;
+  taskStatus: TaskStatus;
+  blocking: boolean;
+  severity: Severity;
+  file: string;
+  line: number | null;
+  rule: string;
+  message: string;
+  fixHint: string | null;
+  ts: string;
+}

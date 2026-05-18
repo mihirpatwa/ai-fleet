@@ -29,3 +29,14 @@ const STATUS: Record<string, string> = {
 export function statusClasses(status: string): string {
   return STATUS[status] ?? GRAY;
 }
+
+const SEVERITY: Record<string, string> = {
+  critical: 'bg-red-500/20 text-red-700 dark:text-red-300 border-red-500/40',
+  high: 'bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30',
+  med: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30',
+  low: 'bg-gray-500/15 text-gray-700 dark:text-gray-300 border-gray-500/30',
+};
+
+export function severityClasses(severity: string): string {
+  return SEVERITY[severity] ?? GRAY;
+}

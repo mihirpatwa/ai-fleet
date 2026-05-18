@@ -3,6 +3,7 @@
 // the SQLite state layer, the scheduler and the HTTP/WS server together, then
 // blocks until a termination signal triggers a graceful drain.
 import { Command } from 'commander';
+import { createAuditLog } from '../audit.js';
 import { createSessionTaskMap, FleetBus } from '../bus.js';
 import { aifleetDir, loadConfig, type FleetConfig } from '../config.js';
 import { createDb } from '../db.js';
@@ -36,8 +37,9 @@ async function main(flags: Flags): Promise<void> {
   const db = createDb();
   const bus = new FleetBus();
   const sessionMap = createSessionTaskMap();
+  const audit = createAuditLog(aifleetDir());
 
-  const spawner = createSpawner({ db, config, bus, sessionMap, logger });
+  const spawner = createSpawner({ db, config, bus, sessionMap, logger, audit });
   const loop = createLoop({ db, config, spawner, logger });
   const server = await createServer({
     db,
@@ -66,6 +68,7 @@ async function main(flags: Flags): Promise<void> {
         await loop.stop();
         await server.close();
         db.close();
+        audit.close();
       } catch (err) {
         logger.error({ err }, 'error during shutdown');
       } finally {

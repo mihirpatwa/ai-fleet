@@ -12,6 +12,8 @@ import type {
   AgentSummary,
   CostRow,
   FleetEvent,
+  SecurityFinding,
+  Severity,
   Task,
   TaskMetrics,
   TaskNode,
@@ -391,5 +393,42 @@ export function costTotals(): {
       };
     },
     { costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, runs: 0 },
+  );
+}
+
+const SEV_RANK: Record<Severity, number> = { critical: 0, high: 1, med: 2, low: 3 };
+
+/** Flattened security-auditor findings across the project's audit tasks. */
+export function securityFindings(project?: string): SecurityFinding[] {
+  const tasks = listTasks({
+    agent: 'security-auditor',
+    ...(project ? { project } : {}),
+  });
+  const out: SecurityFinding[] = [];
+  for (const t of tasks) {
+    const o = (t.outputJson ?? null) as {
+      blocking?: unknown;
+      findings?: Array<Record<string, unknown>>;
+    } | null;
+    if (!o || !Array.isArray(o.findings)) continue;
+    for (const f of o.findings) {
+      const sev = String(f['severity']);
+      out.push({
+        taskId: t.id,
+        projectRoot: t.projectRoot,
+        taskStatus: t.status,
+        blocking: o.blocking === true,
+        severity: (['low', 'med', 'high', 'critical'].includes(sev) ? sev : 'low') as Severity,
+        file: String(f['file'] ?? '?'),
+        line: typeof f['line'] === 'number' ? f['line'] : null,
+        rule: String(f['rule'] ?? '?'),
+        message: String(f['message'] ?? ''),
+        fixHint: typeof f['fix_hint'] === 'string' ? f['fix_hint'] : null,
+        ts: t.updatedAt,
+      });
+    }
+  }
+  return out.sort(
+    (a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity] || b.ts.localeCompare(a.ts),
   );
 }
