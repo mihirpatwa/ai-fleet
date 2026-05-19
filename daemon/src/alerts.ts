@@ -9,7 +9,9 @@ export type AlertEvent =
   | 'cost_cap_exceeded'
   | 'security_blocking_finding'
   | 'goal_completed'
-  | 'goal_failed';
+  | 'goal_failed'
+  // Phase 13: a queued task's model was deprecated/removed at the API.
+  | 'model_deprecated';
 
 export interface AlertContext {
   taskId?: string;

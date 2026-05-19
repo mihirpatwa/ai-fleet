@@ -29,11 +29,24 @@ const SONNET_4: ModelPricing = { input: 3.0, output: 15.0, cacheRead: 0.3 };
 const OPUS_4: ModelPricing = { input: 15.0, output: 75.0, cacheRead: 1.5 };
 const HAIKU_4: ModelPricing = { input: 1.0, output: 5.0, cacheRead: 0.1 };
 
-/** Exact model id → pricing. The two ids the daemon ships with up front. */
+/**
+ * Exact model id → pricing, kept in sync with Anthropic's public price sheet.
+ * Covers every id in the daemon's bundled model registry (models.ts); the
+ * family fallbacks below still price any newer point release sensibly while
+ * the WARN (see {@link hasExactPricing}) nudges an operator to add it here.
+ */
 export const PRICING: Readonly<Record<string, ModelPricing>> = {
-  'claude-sonnet-4-6': SONNET_4,
   'claude-opus-4-7': OPUS_4,
+  'claude-opus-4-6': OPUS_4,
+  'claude-sonnet-4-6': SONNET_4,
+  'claude-sonnet-4-5': SONNET_4,
+  'claude-haiku-4-5': HAIKU_4,
 };
+
+/** True only for an exact price-sheet entry (family fallback does NOT count). */
+export function hasExactPricing(model: string): boolean {
+  return Object.prototype.hasOwnProperty.call(PRICING, model);
+}
 
 // Prefix fallbacks so a future point release (claude-sonnet-4-7, …) or an
 // alias still prices correctly instead of silently costing $0.

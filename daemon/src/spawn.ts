@@ -81,11 +81,39 @@ export function parseAgentFile(text: string): ParsedAgent {
   };
 }
 
-/** Resolve the model for an agent per config precedence. */
-export function resolveModel(config: FleetConfig, agent: string): string {
+/**
+ * Resolve the model for an agent. Precedence: per-task override → per-agent
+ * selection → orchestrator/default — all from config.model_selection (phase
+ * 13). The override is only honoured when per_task_allow_override is set.
+ */
+export function resolveModel(
+  config: FleetConfig,
+  agent: string,
+  override?: string | null,
+): string {
+  if (override) return override;
+  const ms = config.model_selection;
+  return ms.per_agent[agent] ?? (agent === 'orchestrator' ? ms.orchestrator : ms.default);
+}
+
+/** Per-task model override carried in a task's input_json, if present. */
+function readModelOverride(input: unknown): string | null {
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    const v = (input as Record<string, unknown>)['model_override'];
+    if (typeof v === 'string' && v.length > 0) return v;
+  }
+  return null;
+}
+
+/** Heuristic: did the SDK fail because the model id is gone/deprecated? */
+export function isModelDeprecated(message: string): boolean {
+  const m = message.toLowerCase();
+  if (!/model/.test(m)) return false;
   return (
-    config.per_agent_models[agent] ??
-    (agent === 'orchestrator' ? config.orchestrator_model : config.default_model)
+    /\b404\b/.test(m) ||
+    /not[_ ]?found/.test(m) ||
+    /deprecat/.test(m) ||
+    /no such model|unknown model|invalid model|model.*(removed|retired)/.test(m)
   );
 }
 
@@ -196,6 +224,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
           projectRoot: task.projectRoot,
           summary: message,
         });
+        emit(task, 'log', { notify: 'goal_failed', summary: message, root_id: task.rootId });
       }
       queueRetrospector(task);
     }
@@ -277,7 +306,15 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
       return;
     }
 
-    const model = resolveModel(config, task.assignedAgent);
+    // Per-task override: prefer this task's, else the root task's (so the
+    // whole tree honours a goal-level model choice), gated by config.
+    const ownOverride = readModelOverride(task.inputJson);
+    const rootOverride =
+      task.parentId === null
+        ? ownOverride
+        : (ownOverride ?? readModelOverride(db.getTask(task.rootId)?.inputJson));
+    const override = config.model_selection.per_task_allow_override ? rootOverride : null;
+    const model = resolveModel(config, task.assignedAgent, override);
     const wdir = workDir(task.id);
     try {
       mkdirSync(wdir, { recursive: true });
@@ -308,10 +345,16 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
         cap.reason = c.reason ?? 'cost cap exceeded';
       } else if (c.warn && !cap.warned) {
         cap.warned = true;
+        const capSummary = `~80% of a cost cap (task $${c.taskUsd.toFixed(4)}, agent/hr $${c.agentHourUsd.toFixed(4)})`;
         void alerts.notify('cost_cap_warning_80', {
           taskId: task.id,
           projectRoot: task.projectRoot,
-          summary: `~80% of a cost cap (task $${c.taskUsd.toFixed(4)}, agent/hr $${c.agentHourUsd.toFixed(4)})`,
+          summary: capSummary,
+        });
+        emit(task, 'log', {
+          notify: 'cost_cap_warning_80',
+          summary: capSummary,
+          root_id: task.rootId,
         });
       }
       return cap.tripped;
@@ -454,7 +497,40 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
       }
     } catch (err) {
       live.delete(task.id);
-      onFailure(task, err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      // Phase 13: a deprecated/removed model is not a transient failure —
+      // retrying won't help. Block the task for one-click migration instead.
+      if (isModelDeprecated(message)) {
+        const suggested = resolveModel(config, task.assignedAgent);
+        db.updateTask(task.id, {
+          status: 'blocked',
+          error: `model deprecated: ${model} — ${message}`,
+        });
+        emit(task, 'blocked', {
+          reason: 'model_deprecated',
+          bad_model: model,
+          suggested,
+          detail: message,
+        });
+        logger.warn(
+          { taskId: task.id, badModel: model, suggested },
+          'task blocked: model deprecated',
+        );
+        const depSummary = `model ${model} deprecated; choose replacement (suggested ${suggested})`;
+        void alerts.notify('model_deprecated', {
+          taskId: task.id,
+          projectRoot: task.projectRoot,
+          summary: depSummary,
+        });
+        emit(task, 'log', {
+          notify: 'model_deprecated',
+          summary: depSummary,
+          root_id: task.rootId,
+        });
+        queueRetrospector(task);
+        return;
+      }
+      onFailure(task, message);
       return;
     }
     live.delete(task.id);
@@ -487,6 +563,11 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
           taskId: task.id,
           projectRoot: task.projectRoot,
           summary: gate.reason ?? 'blocking security finding',
+        });
+        emit(task, 'log', {
+          notify: 'security_blocking_finding',
+          summary: gate.reason ?? 'blocking security finding',
+          root_id: task.rootId,
         });
         queueRetrospector(task);
         return;
@@ -525,6 +606,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
           projectRoot: task.projectRoot,
           summary: task.title,
         });
+        emit(task, 'log', { notify: 'goal_completed', summary: task.title, root_id: task.rootId });
       }
       queueRetrospector(task);
     }

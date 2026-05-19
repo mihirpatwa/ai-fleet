@@ -1,47 +1,38 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { Suspense } from 'react';
+import { Inter } from 'next/font/google';
 import './globals.css';
-import { projects } from '@/lib/db';
-import { TopBar } from '@/components/top-bar';
-import { Live } from '@/components/live';
+import { ThemeScript } from '@/components/Shell/ThemeScript';
+import { Providers } from './providers';
+import { AppShell } from '@/components/Shell/AppShell';
+
+// Spec token fontFamily is Inter; self-host it via next/font and expose it as
+// --font-inter (referenced by the antd token + globals.css body).
+const inter = Inter({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-inter',
+});
 
 export const metadata: Metadata = {
   title: 'ai-fleet dashboard',
   description: 'Live view of the autonomous agent fleet',
 };
 
-const NAV = [
-  { href: '/', label: 'Board' },
-  { href: '/goals', label: 'Goals' },
-  { href: '/agents', label: 'Agents' },
-  { href: '/security', label: 'Security' },
-  { href: '/memory', label: 'Memory' },
-  { href: '/cost', label: 'Cost' },
-];
-
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-background text-foreground antialiased">
-        {/* TopBar reads useSearchParams(); Suspense lets the static
-            not-found page prerender without a CSR bailout. */}
-        <Suspense fallback={<div className="h-[57px] border-b" aria-hidden />}>
-          <TopBar projects={projects()} />
-        </Suspense>
-        <nav className="flex gap-1 border-b px-4 py-2 text-sm">
-          {NAV.map((n) => (
-            <Link
-              key={n.href}
-              href={n.href}
-              className="rounded-md px-3 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              {n.label}
-            </Link>
-          ))}
-        </nav>
-        <main className="p-4">{children}</main>
-        <Live />
+    // suppressHydrationWarning: the ThemeScript mutates <html> before React
+    // hydrates (dataset.theme / colorScheme / background), which is expected.
+    <html lang="en" className={inter.variable} suppressHydrationWarning>
+      <body suppressHydrationWarning>
+        <ThemeScript />
+        <Providers>
+          {/* AppShell reads useSearchParams(); Suspense keeps static
+              prerender from bailing the whole tree to CSR. */}
+          <Suspense fallback={<div style={{ minHeight: '100vh' }} aria-hidden />}>
+            <AppShell>{children}</AppShell>
+          </Suspense>
+        </Providers>
       </body>
     </html>
   );

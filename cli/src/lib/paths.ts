@@ -16,11 +16,16 @@ export const daemonWsUrl = daemonUrl.replace(/^http/, 'ws') + '/ws';
 export const dashboardUrl =
   process.env['AIFLEET_DASHBOARD_URL'] ?? `http://localhost:${DASHBOARD_PORT}`;
 
+// dashboard/ is the Antd app post phase-11 swap (the retired shadcn app lives
+// in dashboard-legacy/). AIFLEET_DASHBOARD_DIR overrides — e.g. point back at
+// dashboard-legacy to A/B the old UI.
+const dashboardDir = process.env['AIFLEET_DASHBOARD_DIR'] ?? join(fleetRoot, 'dashboard');
+
 export const paths = {
   daemonEntry: join(fleetRoot, 'daemon', 'dist', 'cli', 'run.js'),
   aifleetDb: join(fleetRoot, 'daemon', 'dist', 'cli', 'db.js'),
-  dashboardDir: join(fleetRoot, 'dashboard'),
-  nextBin: join(fleetRoot, 'dashboard', 'node_modules', 'next', 'dist', 'bin', 'next'),
+  dashboardDir,
+  nextBin: join(dashboardDir, 'node_modules', 'next', 'dist', 'bin', 'next'),
   profilesDir: join(fleetRoot, 'profiles'),
   agentsDir: join(fleetRoot, 'agents'),
   installHooks: join(fleetRoot, 'scripts', 'install-hooks.ts'),

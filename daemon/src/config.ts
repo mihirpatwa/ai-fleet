@@ -3,8 +3,8 @@
 // default, so a missing file yields a fully-formed config. Keys are snake_case
 // to match exactly what an operator writes in config.yaml.
 import { homedir } from 'node:os';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
 import { z } from 'zod';
 
@@ -55,6 +55,26 @@ const alertsConfig = z
   })
   .default({ dashboard_url: 'http://localhost:3737' });
 
+// Phase-13 dynamic model selection. Replaces the static default_model /
+// orchestrator_model / per_agent_models trio (those stay in the schema for
+// back-compat but resolveModel now reads model_selection). `per_agent` is
+// filled by the UI; `default`/`orchestrator` mirror the legacy defaults so a
+// config without this block behaves exactly as before.
+const modelSelection = z
+  .object({
+    default: z.string().min(1).default('claude-sonnet-4-6'),
+    orchestrator: z.string().min(1).default('claude-opus-4-7'),
+    per_agent: z.record(z.string(), z.string()).default({}),
+    per_task_allow_override: z.boolean().default(true),
+  })
+  .strict()
+  .default({
+    default: 'claude-sonnet-4-6',
+    orchestrator: 'claude-opus-4-7',
+    per_agent: {},
+    per_task_allow_override: true,
+  });
+
 // `.strict()` is intentionally NOT used at the top level: an operator's
 // config.yaml may carry forward keys from a newer daemon, and an unknown key
 // should not crash startup. Nested policy objects stay strict.
@@ -65,6 +85,13 @@ export const fleetConfigSchema = z.object({
   default_model: z.string().min(1).default('claude-sonnet-4-6'),
   orchestrator_model: z.string().min(1).default('claude-opus-4-7'),
   per_agent_models: z.record(z.string(), z.string()).default({}),
+  // Phase-13 dynamic model selection (preferred over the three keys above).
+  model_selection: modelSelection,
+  // Phase-14 directory resolver: roots searched (depth ≤3) to match a
+  // browser-picked folder to an absolute path. ~ is expanded server-side.
+  directory_search_roots: z
+    .array(z.string())
+    .default(['~', '~/Documents', '~/Projects', '~/code', '~/work', '~/repos', '~/src']),
   cost_cap_per_hour_usd: z.number().min(0).default(5.0),
   // Phase-8 circuit breakers (per-agent/hour + per-task absolute).
   per_agent_hourly_cap: z.number().min(0).default(0.5),
@@ -113,4 +140,15 @@ export function loadConfig(path: string = getConfigPath()): FleetConfig {
   } catch (err) {
     throw new Error(`invalid config ${path}: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/**
+ * Persist the (fully-resolved) config to `path` as YAML. Used by the phase-13
+ * model/settings endpoints — the file becomes explicit, which is fine since
+ * every key already has a value. Best-effort dir creation; throws on write
+ * failure so the caller can surface it.
+ */
+export function saveConfig(config: FleetConfig, path: string = getConfigPath()): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, yaml.dump(config, { lineWidth: 100, noRefs: true }), 'utf8');
 }

@@ -62,6 +62,9 @@ export const EVENT_TYPES = [
   'completed',
   'failed',
   'blocked',
+  // Phase 12: emitted internally by hooks.ts when a coder edits a file.
+  'file_edit_start',
+  'file_edit_done',
 ] as const;
 export const eventType = z.enum(EVENT_TYPES);
 export type EventType = z.infer<typeof eventType>;

@@ -55,7 +55,7 @@ export function workDir(taskId: string): string {
 
 /* ------------------------------ denylist -------------------------------- */
 
-function expandHome(p: string): string {
+export function expandHome(p: string): string {
   if (p === '~') return homedir();
   if (p.startsWith('~/')) return join(homedir(), p.slice(2));
   return p;
@@ -71,13 +71,17 @@ function isEnvFile(p: string): boolean {
   return b === '.env' || b.startsWith('.env.');
 }
 
-function within(child: string, parent: string): boolean {
+export function within(child: string, parent: string): boolean {
   const c = resolve(child);
   const par = resolve(parent);
   return c === par || c.startsWith(par + sep);
 }
 
-function hardDenied(abs: string): string | null {
+/**
+ * Phase-8 hard denylist. Reused by the phase-14 directory resolver so a
+ * picked/typed project path can NEVER be one of these even if it matched.
+ */
+export function hardDenied(abs: string): string | null {
   for (const d of DENY_DIRS) if (within(abs, d)) return `hard-denylisted path (${d})`;
   if (DENY_FILES.includes(resolve(abs))) return 'denylisted credentials file';
   return null;

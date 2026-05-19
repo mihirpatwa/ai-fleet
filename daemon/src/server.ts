@@ -1,14 +1,20 @@
 // Control + observability plane. Fastify on config.server_port exposes health,
 // Prometheus metrics, task CRUD, the hook event-ingestion endpoint, and a
 // WebSocket that fans out every freshly-inserted event row in real time.
+import { basename } from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import type { Logger } from 'pino';
 import { z } from 'zod';
 import type { FleetBus, SessionTaskMap } from './bus.js';
 import type { FleetConfig } from './config.js';
+import { fleetConfigSchema, saveConfig } from './config.js';
 import { EVENT_TYPES, TASK_STATUSES, tsMsAgo, type FleetDb, type TaskStatus } from './db.js';
 import { recordAndBroadcast } from './events.js';
+import { onToolUsePost, onToolUsePre } from './hooks.js';
+import type { ModelRegistry } from './models.js';
+import { resolvePath } from './resolve.js';
+import { deleteRecentProject, listRecentProjects, touchRecentProject } from './recents.js';
 import { deleteMemory, getMemory, listMemories, pinMemory, updateLesson } from './memory.js';
 
 export interface ServerDeps {
@@ -17,6 +23,8 @@ export interface ServerDeps {
   bus: FleetBus;
   sessionMap: SessionTaskMap;
   logger: Logger;
+  /** Phase-13 dynamic model registry. */
+  models: ModelRegistry;
   /** Live SDK query count, surfaced in /metrics. */
   inFlight?: () => number;
 }
@@ -26,6 +34,9 @@ const createTaskBody = z
     goal: z.string().min(1),
     project_root: z.string().min(1),
     agent: z.string().min(1).optional(),
+    // Phase 13: per-task model override (honoured for the whole task tree
+    // when config.model_selection.per_task_allow_override is set).
+    model_override: z.string().min(1).optional(),
   })
   .strict();
 
@@ -56,8 +67,35 @@ function prom(
   return out.join('\n') + '\n';
 }
 
+// Changing one of these can't take effect without a daemon restart: the
+// logger level and HTTP port are bound at startup, and the loop's setInterval
+// + p-limit gate are created once from poll_interval_ms / max_concurrent_agents.
+const DISRUPTIVE_KEYS = [
+  'server_port',
+  'log_level',
+  'poll_interval_ms',
+  'max_concurrent_agents',
+] as const;
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Recursive merge of `patch` into `base` (objects deep, scalars/arrays replace). */
+function deepMerge(
+  base: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(patch)) {
+    const cur = out[k];
+    out[k] = isPlainObject(cur) && isPlainObject(v) ? deepMerge(cur, v) : v;
+  }
+  return out;
+}
+
 export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
-  const { db, bus, sessionMap, logger } = deps;
+  const { db, config, bus, sessionMap, logger, models } = deps;
   // Fastify's own request logger stays off: the daemon logs notable events
   // through its pino instance and exposes the rest via /metrics. (Passing a
   // typed pino instance here would also rebind the FastifyInstance logger
@@ -105,15 +143,26 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       void reply.code(400);
       return { error: 'invalid body', detail: parsed.error.flatten() };
     }
-    const { goal, project_root, agent } = parsed.data;
+    const { goal, project_root, agent, model_override } = parsed.data;
     const task = db.createTask({
       projectRoot: project_root,
       title: goal,
       assignedAgent: agent ?? 'orchestrator',
       // Superset the subagents' input schemas read: orchestrator wants
       // `goal`+`repoRoot`, doc-writer/others want `task`+`repoRoot`.
-      inputJson: { goal, task: goal, repoRoot: project_root },
+      inputJson: {
+        goal,
+        task: goal,
+        repoRoot: project_root,
+        ...(model_override ? { model_override } : {}),
+      },
     });
+    // Phase 14: remember this folder for the header "Recent" section.
+    try {
+      touchRecentProject(db, project_root, basename(project_root) || project_root);
+    } catch (err) {
+      logger.warn({ err }, 'recent_projects update failed');
+    }
     logger.info({ taskId: task.id, agent: task.assignedAgent }, 'task created via API');
     void reply.code(201);
     return task;
@@ -263,8 +312,237 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       type: b.event_type,
       ...(Object.keys(payload).length ? { payloadJson: payload as never } : {}),
     });
+
+    // Phase 12: capture file edits for the live diff view. Best-effort — a
+    // failure here must never break event ingestion.
+    if (
+      taskId &&
+      b.tool_name &&
+      (b.event_type === 'tool_use_pre' || b.event_type === 'tool_use_post')
+    ) {
+      try {
+        const task = db.getTask(taskId);
+        if (task) {
+          const ctx = {
+            taskId,
+            agent: task.assignedAgent,
+            projectRoot: task.projectRoot,
+            toolName: b.tool_name,
+            toolInput: b.tool_input,
+          };
+          if (b.event_type === 'tool_use_pre') onToolUsePre(db, bus, ctx);
+          else onToolUsePost(db, bus, ctx);
+        }
+      } catch (err) {
+        logger.warn({ err, taskId }, 'file-edit capture failed');
+      }
+    }
+
     void reply.code(201);
     return row;
+  });
+
+  // Phase 12: file edits captured by hooks.ts, for the dashboard Code tab.
+  app.get('/file-edits', (req) => {
+    const q = (req.query ?? {}) as Record<string, string | undefined>;
+    if (!q['task_id']) return [];
+    return db.raw
+      .prepare(
+        `SELECT id, task_id AS taskId, agent, file_path AS filePath,
+                lines_added AS linesAdded, lines_removed AS linesRemoved, ts
+           FROM file_edits WHERE task_id = ? ORDER BY id ASC`,
+      )
+      .all(q['task_id']);
+  });
+
+  app.get<{ Params: { id: string } }>('/file-edits/:id', (req, reply) => {
+    const row = db.raw
+      .prepare(
+        `SELECT id, task_id AS taskId, agent, file_path AS filePath,
+                before_content AS beforeContent, after_content AS afterContent,
+                diff_unified AS diffUnified, lines_added AS linesAdded,
+                lines_removed AS linesRemoved, ts
+           FROM file_edits WHERE id = ?`,
+      )
+      .get(Number(req.params.id));
+    if (!row) {
+      void reply.code(404);
+      return { error: 'file edit not found' };
+    }
+    return row;
+  });
+
+  // ---------------------- Phase 13: model selection ----------------------
+
+  app.get('/models', () => models.list());
+
+  app.get('/models/active', () => ({
+    default: config.model_selection.default,
+    orchestrator: config.model_selection.orchestrator,
+    per_agent: config.model_selection.per_agent,
+    per_task_allow_override: config.model_selection.per_task_allow_override,
+  }));
+
+  // Mutates the shared in-memory config (resolveModel reads it live on the
+  // next spawn) and persists to config.yaml. name = default | orchestrator |
+  // <agent>. Unknown model_id → 400 with the valid set.
+  app.put<{ Params: { name: string } }>('/models/agent/:name', (req, reply) => {
+    const body = (req.body ?? {}) as { model_id?: unknown };
+    const id = body.model_id;
+    if (typeof id !== 'string' || id.length === 0) {
+      void reply.code(400);
+      return { error: 'body.model_id (string) required' };
+    }
+    if (!models.has(id)) {
+      void reply.code(400);
+      return { error: `unknown model_id: ${id}`, valid: models.ids() };
+    }
+    const name = req.params.name;
+    const ms = config.model_selection;
+    if (name === 'default') ms.default = id;
+    else if (name === 'orchestrator') ms.orchestrator = id;
+    else ms.per_agent[name] = id;
+    try {
+      saveConfig(config);
+    } catch (err) {
+      logger.warn({ err }, 'model selection applied in-memory but config.yaml write failed');
+    }
+    logger.info({ name, model: id }, 'model selection updated');
+    return {
+      default: ms.default,
+      orchestrator: ms.orchestrator,
+      per_agent: ms.per_agent,
+      per_task_allow_override: ms.per_task_allow_override,
+    };
+  });
+
+  app.post('/models/refresh', async () => ({ data: await models.refresh() }));
+
+  // One-click migration for a task blocked because its model was deprecated:
+  // stamp the current global default as the override and requeue it.
+  app.post<{ Params: { id: string } }>('/models/migrate-task/:id', (req, reply) => {
+    const task = db.getTask(req.params.id);
+    if (!task) {
+      void reply.code(404);
+      return { error: 'task not found' };
+    }
+    if (task.status !== 'blocked') {
+      void reply.code(409);
+      return { error: `task is ${task.status}, not blocked` };
+    }
+    const replacement = config.model_selection.default;
+    const input =
+      task.inputJson && typeof task.inputJson === 'object' && !Array.isArray(task.inputJson)
+        ? (task.inputJson as Record<string, unknown>)
+        : {};
+    const updated = db.updateTask(task.id, {
+      status: 'queued',
+      error: null,
+      retryCount: 0,
+      inputJson: { ...input, model_override: replacement },
+    });
+    recordAndBroadcast(db, bus, {
+      taskId: task.id,
+      agent: task.assignedAgent,
+      type: 'log',
+      payloadJson: { action: 'model migrated via dashboard', model: replacement },
+    });
+    logger.info({ taskId: task.id, model: replacement }, 'task migrated to current default model');
+    return updated;
+  });
+
+  // ---------------------- Phase 13: settings/config ----------------------
+
+  app.get('/config', () => config);
+
+  // Partial deep-merge → re-validate via the zod schema → mutate the SHARED
+  // config object (loop/spawn read it live) → persist. Disruptive keys apply
+  // only after a restart; report which so the UI can show a banner.
+  app.put('/config', (req, reply) => {
+    const patch = req.body;
+    if (!isPlainObject(patch)) {
+      void reply.code(400);
+      return { error: 'body must be a JSON object (partial config)' };
+    }
+    const merged = deepMerge(config as unknown as Record<string, unknown>, patch);
+    const parsed = fleetConfigSchema.safeParse(merged);
+    if (!parsed.success) {
+      void reply.code(400);
+      return { error: 'invalid config', detail: parsed.error.flatten() };
+    }
+    const restartNeeded = DISRUPTIVE_KEYS.filter(
+      (k) => JSON.stringify(config[k]) !== JSON.stringify(parsed.data[k]),
+    );
+    Object.assign(config, parsed.data);
+    try {
+      saveConfig(config);
+    } catch (err) {
+      logger.warn({ err }, 'config applied in-memory but config.yaml write failed');
+    }
+    logger.info({ keys: Object.keys(patch), restartNeeded }, 'config updated via API');
+    return { ok: true, restartNeeded, config };
+  });
+
+  // Median cost of recent runs for an agent (last 30 days, ≤10 most recent) —
+  // powers the SubmitGoal cost preview. null when there's not enough data.
+  app.get('/cost/estimate', (req) => {
+    const q = (req.query ?? {}) as Record<string, string | undefined>;
+    const agent = q['agent'];
+    if (!agent) return { agent: null, estimateUsd: null, samples: 0 };
+    const rows = db.raw
+      .prepare(
+        `SELECT cost_usd AS c FROM agent_runs
+          WHERE agent = ? AND cost_usd IS NOT NULL
+            AND started_at >= ?
+          ORDER BY started_at DESC LIMIT 10`,
+      )
+      .all(agent, tsMsAgo(30 * 24 * 3_600_000)) as Array<{ c: number }>;
+    const costs = rows.map((r) => Number(r.c)).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+    if (costs.length === 0) return { agent, estimateUsd: null, samples: 0 };
+    const mid = Math.floor(costs.length / 2);
+    const median =
+      costs.length % 2 === 0 ? (costs[mid - 1]! + costs[mid]!) / 2 : costs[mid]!;
+    return { agent, estimateUsd: median, samples: costs.length };
+  });
+
+  // ------------------ Phase 14: directory resolver ------------------
+
+  app.post('/resolve-path', (req, reply) => {
+    const b = (req.body ?? {}) as {
+      hint_name?: unknown;
+      hint_entries?: unknown;
+      type_path?: unknown;
+    };
+    const { code, result } = resolvePath(db, config.directory_search_roots, {
+      ...(typeof b.hint_name === 'string' ? { hint_name: b.hint_name } : {}),
+      ...(Array.isArray(b.hint_entries) ? { hint_entries: b.hint_entries.map(String) } : {}),
+      ...(typeof b.type_path === 'string' ? { type_path: b.type_path } : {}),
+    });
+    void reply.code(code);
+    return result;
+  });
+
+  app.get('/recent-projects', (req) => {
+    const q = (req.query ?? {}) as Record<string, string | undefined>;
+    const limit = q['limit'] ? Number(q['limit']) : 20;
+    return listRecentProjects(db, Number.isFinite(limit) ? limit : 20);
+  });
+
+  // Absolute paths contain '/', which a Fastify :path param can't carry
+  // safely — take it as ?path= instead (the phase spec's /:path form is the
+  // intent; this is the robust shape).
+  app.delete('/recent-projects', (req, reply) => {
+    const q = (req.query ?? {}) as Record<string, string | undefined>;
+    const p = q['path'];
+    if (!p) {
+      void reply.code(400);
+      return { error: 'query ?path= (absolute path) required' };
+    }
+    if (!deleteRecentProject(db, p)) {
+      void reply.code(404);
+      return { error: 'not found', path: p };
+    }
+    return { ok: true, path: p };
   });
 
   app.get('/ws', { websocket: true }, (socket) => {

@@ -10,6 +10,7 @@ import { aifleetDir, loadConfig, type FleetConfig } from '../config.js';
 import { createDb } from '../db.js';
 import { createLogger } from '../logger.js';
 import { createLoop } from '../loop.js';
+import { createModelRegistry } from '../models.js';
 import { createScheduler } from '../scheduler.js';
 import { createServer } from '../server.js';
 import { createSpawner } from '../spawn.js';
@@ -41,6 +42,10 @@ async function main(flags: Flags): Promise<void> {
   const sessionMap = createSessionTaskMap();
   const audit = createAuditLog(aifleetDir());
   const alerts = createAlerts(config, logger);
+  // Phase-13 model registry: serve the cached list immediately, refresh in
+  // the background (and hourly) — only hits Anthropic when a key is set.
+  const models = createModelRegistry(logger);
+  models.start();
 
   const spawner = createSpawner({ db, config, bus, sessionMap, logger, audit, alerts });
   const loop = createLoop({ db, config, spawner, logger });
@@ -51,6 +56,7 @@ async function main(flags: Flags): Promise<void> {
     bus,
     sessionMap,
     logger,
+    models,
     inFlight: spawner.inFlight,
   });
 
@@ -71,6 +77,7 @@ async function main(flags: Flags): Promise<void> {
     void (async () => {
       try {
         scheduler.stop();
+        models.stop();
         await loop.stop();
         await server.close();
         db.close();
