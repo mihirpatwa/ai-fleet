@@ -9,6 +9,8 @@
     "node": ">=20"
   },
   "scripts": {
+    "start": "bash start.sh",
+    "stop": "bash stop.sh",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "lint": "eslint .",
