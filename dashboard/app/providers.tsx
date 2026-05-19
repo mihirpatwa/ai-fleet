@@ -3,7 +3,6 @@
 import '@ant-design/v5-patch-for-react-19';
 import { useEffect, useState, type ReactNode } from 'react';
 import { AntdRegistry } from '@ant-design/nextjs-registry';
-import { StyleProvider } from '@ant-design/cssinjs';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { useTheme } from '@/lib/stores/useTheme';
 import { themeConfigFor, type Resolved } from '@/lib/theme';
@@ -34,14 +33,17 @@ export function Providers({ children }: { children: ReactNode }) {
     root.style.colorScheme = resolved;
   }, [resolved]);
 
+  // No extra <StyleProvider layer>: wrapping Antd's CSS in @layer made it
+  // lose to unlayered/UA styles (broke Segmented entirely + let SSR-light
+  // component styles persist after a client dark switch). AntdRegistry already
+  // sets up StyleProvider for SSR extraction; cssVar mode (lib/theme.ts) makes
+  // the dark/light switch swap CSS variables so it actually applies.
   return (
     <AntdRegistry>
-      <StyleProvider layer>
-        <ConfigProvider theme={themeConfigFor(resolved)}>
-          {/* antd App: message/notification/modal context (used by toasts). */}
-          <AntApp style={{ minHeight: '100vh' }}>{children}</AntApp>
-        </ConfigProvider>
-      </StyleProvider>
+      <ConfigProvider theme={themeConfigFor(resolved)}>
+        {/* antd App: message/notification/modal context (used by toasts). */}
+        <AntApp style={{ minHeight: '100vh' }}>{children}</AntApp>
+      </ConfigProvider>
     </AntdRegistry>
   );
 }

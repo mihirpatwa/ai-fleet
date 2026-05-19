@@ -24,8 +24,14 @@ const baseComponents: NonNullable<ThemeConfig['components']> = {
   Tabs: { itemActiveColor: baseToken.colorPrimary },
 };
 
+// cssVar + hashed:false: emit token CSS variables with stable (non-theme-
+// hashed) component selectors, so flipping algorithm/tokens on the client
+// actually restyles SSR-rendered components (the dark/system blocker) instead
+// of leaving the server's light styles stuck.
 export const lightTheme: ThemeConfig = {
   algorithm: defaultAlgorithm,
+  cssVar: true,
+  hashed: false,
   token: { ...baseToken },
   components: {
     ...baseComponents,
@@ -36,6 +42,8 @@ export const lightTheme: ThemeConfig = {
 
 export const darkTheme: ThemeConfig = {
   algorithm: darkAlgorithm,
+  cssVar: true,
+  hashed: false,
   token: {
     ...baseToken,
     colorBgLayout: '#0b0d12',

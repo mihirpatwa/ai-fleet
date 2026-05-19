@@ -126,12 +126,17 @@ export function AppShell({ children }: { children: ReactNode }) {
           position: 'sticky',
           top: 0,
           zIndex: 20,
-          height: 56,
-          lineHeight: '56px',
-          padding: '0 12px',
+          // Wrap instead of clipping on narrow screens (mobile-header fix);
+          // height grows to fit the wrapped rows.
+          minHeight: 56,
+          height: 'auto',
+          lineHeight: 'normal',
+          padding: '8px 12px',
           display: 'flex',
+          flexWrap: 'wrap',
           alignItems: 'center',
           gap: 12,
+          rowGap: 8,
           borderBottom: '1px solid rgba(128,128,128,0.18)',
         }}
         onDragOver={onHeaderDragOver}
@@ -172,12 +177,15 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <SubmitGoal project={project} width={screens.md ? 340 : 200} />
 
-        <Segmented<ThemeMode>
-          options={THEME_OPTS}
-          value={mode}
-          onChange={setMode}
-          size="middle"
-        />
+        {/* Hidden on xs to de-crowd the mobile header — also in /settings. */}
+        {screens.sm && (
+          <Segmented<ThemeMode>
+            options={THEME_OPTS}
+            value={mode}
+            onChange={setMode}
+            size="middle"
+          />
+        )}
 
         <Tooltip title="Notifications">
           <Badge count={notifs} size="small" overflowCount={99}>
