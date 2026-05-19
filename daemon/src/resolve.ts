@@ -32,18 +32,27 @@ const SKIP_DIRS = new Set([
   'Library',
   '.Trash',
 ]);
-const MAX_DEPTH = 3;
-const MAX_VISITED = 6000;
-const MAX_CANDIDATES = 10;
+// Deeper + wider so an arbitrary picked folder/subfolder still fingerprint-
+// matches (the FS Access handle only exposes name + entries, never an abspath).
+const MAX_DEPTH = 6;
+const MAX_VISITED = 25000;
+const MAX_CANDIDATES = 12;
 
 export const DEFAULT_SEARCH_ROOTS = [
   '~',
   '~/Documents',
+  '~/Desktop',
+  '~/Downloads',
   '~/Projects',
+  '~/projects',
+  '~/Developer',
+  '~/dev',
   '~/code',
   '~/work',
   '~/repos',
   '~/src',
+  '/workspace',
+  '/srv',
 ];
 
 function isDir(p: string): boolean {

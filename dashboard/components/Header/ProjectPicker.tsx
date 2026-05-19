@@ -83,8 +83,12 @@ export function ProjectPicker() {
       setCandPick(o.candidates[0]?.absolute_path ?? '');
       return;
     }
-    // fallback (unsupported or no match)
+    // fallback: browser without the native picker, OR the folder couldn't be
+    // fingerprint-matched. Prefill the typed modal with the folder name so the
+    // user just completes its absolute path (works on any device/browser).
     if (o.error) message.info(o.error);
+    setTypeErr(null);
+    setTypeVal(o.name ? `~/${o.name}` : '');
     setTypeOpen(true);
   }
 

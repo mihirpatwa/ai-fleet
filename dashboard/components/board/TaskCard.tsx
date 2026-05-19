@@ -7,7 +7,8 @@ import { Card, Progress, Tag, Typography } from 'antd';
 import { ClockCircleOutlined } from '@ant-design/icons';
 import type { Task } from '@/lib/types';
 import { roleColor, statusColor } from '@/lib/theme';
-import { elapsed, truncate } from '@/lib/format';
+import { elapsed, parseTs, truncate } from '@/lib/format';
+import { useTicker } from '@/lib/useTicker';
 
 const { Text } = Typography;
 
@@ -15,6 +16,13 @@ export interface CardData {
   task: Task;
   tool: string | null;
   log: string | null;
+}
+
+/** Live per-second timer while running; fixed start→finish span otherwise. */
+function CardElapsed({ task }: { task: Task }) {
+  const running = task.status === 'running';
+  const live = useTicker(parseTs(task.startedAt), running);
+  return <>{running ? live : elapsed(task.startedAt, task.finishedAt)}</>;
 }
 
 export function TaskCard({ task, tool, log }: CardData) {
@@ -36,7 +44,7 @@ export function TaskCard({ task, tool, log }: CardData) {
             {task.assignedAgent}
           </Tag>
           <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-            <ClockCircleOutlined /> {elapsed(task.startedAt, task.finishedAt)}
+            <ClockCircleOutlined /> <CardElapsed task={task} />
           </Text>
         </div>
 

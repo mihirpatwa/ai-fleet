@@ -165,7 +165,9 @@ export async function pickDirectory(): Promise<PickOutcome> {
       window as unknown as {
         showDirectoryPicker(o: object): Promise<DirHandle>;
       }
-    ).showDirectoryPicker({ mode: 'read', id: 'aifleet-project', startIn: 'documents' });
+      // No startIn → the OS dialog opens at the last-used location (kept via
+      // `id`) and the user can navigate anywhere — any folder or subfolder.
+    ).showDirectoryPicker({ mode: 'read', id: 'aifleet-project' });
   } catch {
     return { kind: 'cancelled' }; // AbortError on cancel
   }

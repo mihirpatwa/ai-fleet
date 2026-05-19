@@ -87,11 +87,27 @@ export const fleetConfigSchema = z.object({
   per_agent_models: z.record(z.string(), z.string()).default({}),
   // Phase-13 dynamic model selection (preferred over the three keys above).
   model_selection: modelSelection,
-  // Phase-14 directory resolver: roots searched (depth ≤3) to match a
-  // browser-picked folder to an absolute path. ~ is expanded server-side.
+  // Phase-14 directory resolver: roots searched (depth ≤6) to match a
+  // browser-picked folder/subfolder to an absolute path. ~ is expanded
+  // server-side. Override to add machine-specific locations.
   directory_search_roots: z
     .array(z.string())
-    .default(['~', '~/Documents', '~/Projects', '~/code', '~/work', '~/repos', '~/src']),
+    .default([
+      '~',
+      '~/Documents',
+      '~/Desktop',
+      '~/Downloads',
+      '~/Projects',
+      '~/projects',
+      '~/Developer',
+      '~/dev',
+      '~/code',
+      '~/work',
+      '~/repos',
+      '~/src',
+      '/workspace',
+      '/srv',
+    ]),
   cost_cap_per_hour_usd: z.number().min(0).default(5.0),
   // Phase-8 circuit breakers (per-agent/hour + per-task absolute).
   per_agent_hourly_cap: z.number().min(0).default(0.5),
