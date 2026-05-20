@@ -107,13 +107,18 @@ export function ProviderModal({
   return (
     <Modal
       open={open}
-      width={picked ? 560 : 880}
+      width={picked ? 560 : providers.length <= 2 ? 720 : 880}
       onCancel={onClose}
       closable={!!onClose}
       maskClosable={false}
       destroyOnClose
       footer={null}
       title={picked ? null : 'Choose your AI engine'}
+      // Render inside the React tree (no portal escape) so the ConfigProvider's
+      // cssVar block — which scopes --ant-* variables to its wrapper — actually
+      // styles the modal in the active theme. Otherwise dark mode shows a
+      // white modal because the portal mounts outside that scope.
+      getContainer={false}
     >
       {!picked && (
         <>
@@ -123,7 +128,11 @@ export function ProviderModal({
           </Paragraph>
           <Row gutter={[16, 16]}>
             {providers.map((p) => (
-              <Col key={p.name} xs={24} md={8}>
+              <Col
+                key={p.name}
+                xs={24}
+                md={providers.length === 1 ? 24 : providers.length === 2 ? 12 : 8}
+              >
                 <ProviderCard p={p} active={false} onPick={setPicked} />
               </Col>
             ))}

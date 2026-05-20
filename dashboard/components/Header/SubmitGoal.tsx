@@ -36,6 +36,7 @@ interface RecentProject {
 }
 
 type WdMode = 'current' | 'recent' | 'pick';
+type Effort = 'low' | 'medium' | 'high' | 'max';
 
 export function SubmitGoal({ project }: { project: string }) {
   const router = useRouter();
@@ -48,6 +49,7 @@ export function SubmitGoal({ project }: { project: string }) {
   const [goal, setGoal] = useState('');
   const [agent, setAgent] = useState('orchestrator');
   const [modelOverride, setModelOverride] = useState<string>(''); // '' = default
+  const [effort, setEffort] = useState<Effort>('medium');
   const [wdMode, setWdMode] = useState<WdMode>('current');
   const [workdir, setWorkdir] = useState('');
 
@@ -69,6 +71,7 @@ export function SubmitGoal({ project }: { project: string }) {
     setGoal('');
     setAgent('orchestrator');
     setModelOverride('');
+    setEffort('medium');
     setWdMode('current');
     setWorkdir('');
   }, [open]);
@@ -123,6 +126,7 @@ export function SubmitGoal({ project }: { project: string }) {
           project_root: effectiveProject,
           agent,
           ...(modelOverride ? { model_override: modelOverride } : {}),
+          effort,
         }),
       });
       if (!res.ok) {
@@ -250,6 +254,24 @@ export function SubmitGoal({ project }: { project: string }) {
             </Form.Item>
           </Space.Compact>
 
+          <Form.Item
+            label="Reasoning effort"
+            style={{ marginTop: 16, marginBottom: 0 }}
+            help="Higher = more thinking tokens before each answer. Slower + costlier, but better at hard tasks. Models silently downgrade if they don't support the level."
+          >
+            <Segmented<Effort>
+              block
+              value={effort}
+              onChange={setEffort}
+              options={[
+                { label: 'Low', value: 'low' },
+                { label: 'Medium', value: 'medium' },
+                { label: 'High', value: 'high' },
+                { label: 'Max', value: 'max' },
+              ]}
+            />
+          </Form.Item>
+
           <div style={{ marginTop: 16, padding: 12, borderRadius: 6, background: 'rgba(99,102,241,0.08)' }}>
             <Space direction="vertical" size={4} style={{ width: '100%' }}>
               <Text strong style={{ fontSize: 12 }}>
@@ -258,6 +280,7 @@ export function SubmitGoal({ project }: { project: string }) {
               <Space wrap size={[8, 4]}>
                 <Tag color="purple">{agent}</Tag>
                 <Tag color="blue">{effectiveModel || 'default'}</Tag>
+                <Tag color="geekblue">{effort} effort</Tag>
               </Space>
             </Space>
           </div>

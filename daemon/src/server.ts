@@ -12,6 +12,13 @@ import { fleetConfigSchema, saveConfig } from './config.js';
 import { EVENT_TYPES, TASK_STATUSES, type FleetDb, type TaskStatus } from './db.js';
 import { recordAndBroadcast } from './events.js';
 import { onToolUsePost, onToolUsePre } from './hooks.js';
+import {
+  PRESETS as MCP_PRESETS,
+  deleteServer as deleteMcpServer,
+  listMergedServers as listMcpServers,
+  upsertServer as upsertMcpServer,
+  type McpServerConfig,
+} from './mcp/registry.js';
 import type { ModelRegistry } from './models.js';
 import { capability as nativePickerCapability, nativePick } from './native-picker.js';
 import { PROVIDERS, findProvider } from './providers/registry.js';
@@ -48,6 +55,9 @@ const createTaskBody = z
     // Phase 13: per-task model override (honoured for the whole task tree
     // when config.model_selection.per_task_allow_override is set).
     model_override: z.string().min(1).optional(),
+    // Phase 18d: SDK reasoning effort for the run. Mapped per-provider in
+    // spawn.ts; Claude SDK exposes this as AgentDefinition.effort.
+    effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
   })
   .strict();
 
@@ -151,7 +161,7 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       void reply.code(400);
       return { error: 'invalid body', detail: parsed.error.flatten() };
     }
-    const { goal, project_root, agent, model_override } = parsed.data;
+    const { goal, project_root, agent, model_override, effort } = parsed.data;
     const task = db.createTask({
       projectRoot: project_root,
       title: goal,
@@ -163,6 +173,7 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
         task: goal,
         repoRoot: project_root,
         ...(model_override ? { model_override } : {}),
+        ...(effort ? { effort } : {}),
       },
     });
     // Phase 14: remember this folder for the header "Recent" section.
@@ -551,6 +562,50 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     }
     void reply.code(503);
     return { error: result.unavailable };
+  });
+
+  // ---------------- Phase 18e: MCP server marketplace ----------------
+  // Bundled presets + user-added custom servers. spawn.ts merges the enabled
+  // set into Claude SDK options.mcpServers per task. State lives in
+  // ~/.aifleet/mcp-servers.json.
+
+  app.get('/mcp-servers', () => ({
+    servers: listMcpServers(),
+    presets: MCP_PRESETS,
+  }));
+
+  // Upsert (enable/disable a preset or edit/add a custom).
+  app.put<{ Params: { name: string } }>('/mcp-servers/:name', (req, reply) => {
+    const b = (req.body ?? {}) as Partial<McpServerConfig>;
+    const name = req.params.name;
+    if (!name) {
+      void reply.code(400);
+      return { error: 'name param required' };
+    }
+    if (typeof b.command !== 'string' || !Array.isArray(b.args)) {
+      void reply.code(400);
+      return { error: 'body { command: string, args: string[] } required' };
+    }
+    const next: McpServerConfig = {
+      name,
+      command: b.command,
+      args: b.args.map(String),
+      enabled: b.enabled === true,
+      ...(typeof b.display_name === 'string' ? { display_name: b.display_name } : {}),
+      ...(b.env && typeof b.env === 'object'
+        ? { env: Object.fromEntries(Object.entries(b.env).map(([k, v]) => [k, String(v)])) }
+        : {}),
+      ...(b.preset === true ? { preset: true } : {}),
+    };
+    const merged = upsertMcpServer(next);
+    logger.info({ name, enabled: next.enabled }, 'mcp server upserted');
+    return { servers: merged };
+  });
+
+  app.delete<{ Params: { name: string } }>('/mcp-servers/:name', (req) => {
+    const merged = deleteMcpServer(req.params.name);
+    logger.info({ name: req.params.name }, 'mcp server deleted');
+    return { servers: merged };
   });
 
   // ---------------- Phase 18: AI provider config ----------------

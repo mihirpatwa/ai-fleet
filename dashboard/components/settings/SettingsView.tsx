@@ -31,6 +31,7 @@ import {
 import { useTheme, type ThemeMode } from '@/lib/stores/useTheme';
 import type { ProviderMeta, ProviderState } from '@/lib/provider';
 import { ProviderModal } from '@/components/Provider/ProviderModal';
+import { McpSection } from '@/components/settings/McpSection';
 
 const { Text, Title, Paragraph } = Typography;
 
@@ -301,6 +302,13 @@ export function SettingsView() {
         </Space>
       </Section>
 
+
+      <Section
+        title="MCP servers"
+        hint="External tools agents can use during a run — e.g. Chrome DevTools for the tester, GitHub for repo ops. Enabled servers are passed to every spawn."
+      >
+        <McpSection />
+      </Section>
 
       <Section
         title="Memory"

@@ -58,15 +58,30 @@ export function ConnectForm({
   return (
     <Form layout="vertical" component="div">
       <Form.Item label="Auth method">
-        <Radio.Group value={auth} onChange={(e) => setAuth(e.target.value as AuthMethod)}>
+        <Radio.Group
+          value={auth}
+          onChange={(e) => setAuth(e.target.value as AuthMethod)}
+          style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+        >
           {canApiKey && (
-            <Radio value="api_key">
-              API key — stored in <Text code>~/.aifleet/secrets.env</Text>
+            <Radio value="api_key" style={{ alignItems: 'flex-start' }}>
+              <Space direction="vertical" size={0}>
+                <Text>API key</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  Stored in <Text code>~/.aifleet/secrets.env</Text> (chmod 600).
+                </Text>
+              </Space>
             </Radio>
           )}
           {canLocal && (
-            <Radio value="local">
-              Use Claude Code login — daemon spawns the CLI with your existing credentials
+            <Radio value="local" style={{ alignItems: 'flex-start' }}>
+              <Space direction="vertical" size={0}>
+                <Text>Use existing Claude Code login</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  Daemon spawns the CLI with your installed credentials. No key
+                  saved to disk.
+                </Text>
+              </Space>
             </Radio>
           )}
         </Radio.Group>

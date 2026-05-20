@@ -21,6 +21,7 @@ import type { FleetConfig } from './config.js';
 import type { FleetDb, Json, Task } from './db.js';
 import { recordAndBroadcast } from './events.js';
 import { createMemoryMcp } from './mcp/memory.js';
+import { buildSdkMcpServers } from './mcp/registry.js';
 import { completedRetrospectorRuns, regenerateHotTier } from './memory.js';
 import {
   INJECTION_SUFFIX,
@@ -100,6 +101,16 @@ function readModelOverride(input: unknown): string | null {
   if (input && typeof input === 'object' && !Array.isArray(input)) {
     const v = (input as Record<string, unknown>)['model_override'];
     if (typeof v === 'string' && v.length > 0) return v;
+  }
+  return null;
+}
+
+/** Phase 18d: per-task reasoning-effort level from input_json. */
+export type Effort = 'low' | 'medium' | 'high' | 'max';
+function readEffort(input: unknown): Effort | null {
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    const v = (input as Record<string, unknown>)['effort'];
+    if (v === 'low' || v === 'medium' || v === 'high' || v === 'max') return v;
   }
   return null;
 }
@@ -298,6 +309,14 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
         : (ownOverride ?? readModelOverride(db.getTask(task.rootId)?.inputJson));
     const override = config.model_selection.per_task_allow_override ? rootOverride : null;
     const model = resolveModel(config, task.assignedAgent, override);
+
+    // Phase 18d: reasoning effort inherited from the task's input_json (or the
+    // root's, so the whole tree runs at the user's chosen level).
+    const ownEffort = readEffort(task.inputJson);
+    const effort: Effort | null =
+      task.parentId === null
+        ? ownEffort
+        : (ownEffort ?? readEffort(db.getTask(task.rootId)?.inputJson));
     const wdir = workDir(task.id);
     try {
       mkdirSync(wdir, { recursive: true });
@@ -341,6 +360,10 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
       // When the agent restricts tools, the memory MCP tools must be allowed
       // too or the SDK hides them.
       ...(parsed.tools ? { tools: [...new Set([...parsed.tools, ...MEM_TOOLS])] } : {}),
+      // Phase 18d: reasoning effort. SDK exposes this as a named level the
+      // model can interpret; silently downgraded if the model doesn't support
+      // the level.
+      ...(effort ? { effort } : {}),
     };
 
     const canUseTool = async (
@@ -375,6 +398,9 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
       },
       // Adaptive memory exposed to every agent; the server is built per-spawn
       // so memory.add/pin are caller-enforced via closure (not a shared env).
+      // Phase 18e: merge user-enabled MCP presets (chrome-devtools, github, …)
+      // from ~/.aifleet/mcp-servers.json so the tester etc. can drive a browser
+      // or hit an API the daemon doesn't natively expose.
       mcpServers: {
         memory: createMemoryMcp({
           db,
@@ -383,6 +409,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
           taskId: task.id,
           shadow: shadowRemaining > 0,
         }),
+        ...buildSdkMcpServers(),
       },
       // No bypassPermissions: canUseTool mediates EVERY tool call (sandbox +
       // network egress + audit). Returning allow is the headless approval.
