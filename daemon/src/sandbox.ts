@@ -61,9 +61,26 @@ export function expandHome(p: string): string {
   return p;
 }
 
-const DENY_DIRS = ['~/.ssh', '~/.aws', '~/.config/gh', '/etc', '/var', '/proc', '/sys'].map((d) =>
-  resolve(expandHome(d)),
-);
+// POSIX-side denylist. The phase-15 native picker exposes Windows hosts too,
+// so we also pull in the Windows-specific roots when running on win32 (so a
+// returned C:\Windows path is rejected just like /etc on Linux).
+const WIN_DENY_DIRS =
+  process.platform === 'win32'
+    ? [
+        'C:\\Windows',
+        'C:\\Program Files',
+        'C:\\Program Files (x86)',
+        'C:\\ProgramData',
+        process.env['SystemRoot'] ?? '',
+      ].filter(Boolean)
+    : [];
+
+const DENY_DIRS = [
+  ...['~/.ssh', '~/.aws', '~/.config/gh', '/etc', '/var', '/proc', '/sys'].map((d) =>
+    resolve(expandHome(d)),
+  ),
+  ...WIN_DENY_DIRS.map((d) => resolve(d)),
+];
 const DENY_FILES = ['~/.config/git/credentials'].map((f) => resolve(expandHome(f)));
 
 function isEnvFile(p: string): boolean {

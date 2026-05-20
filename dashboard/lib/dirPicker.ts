@@ -1,9 +1,13 @@
 'use client';
-// Phase 14: browser directory picker. Chromium's showDirectoryPicker opens a
-// native OS dialog (read-only — the daemon does all writes); the chosen
-// handle is cached in IndexedDB so it survives sessions, and the daemon
-// resolves it to an absolute path (lib/resolve.ts). Firefox/Safari have no
-// File System Access API → callers fall back to a typed-path modal.
+// Phase 14/15: cross-browser directory picker.
+//   1. Daemon native picker (Phase 15) — works on every browser because the
+//      OS dialog renders on the daemon host (osascript / zenity / PowerShell).
+//   2. Chromium showDirectoryPicker — kept as a Chromium-only secondary path so
+//      a user can opt into it via drag-and-drop, and as a fallback if the
+//      daemon dialog is unavailable (headless host).
+//   3. Typed-path modal — universal manual entry, used when (1) and (2) fail.
+// The chosen handle is cached in IndexedDB for the Chromium path so it
+// survives sessions; the daemon resolves it to an absolute path via lib/resolve.
 import { get, set, del } from 'idb-keyval';
 
 // Minimal FS Access typings (no DOM lib for these in tsconfig).
@@ -48,6 +52,25 @@ interface Cached {
 
 export function supportsDirectoryPicker(): boolean {
   return typeof window !== 'undefined' && 'showDirectoryPicker' in window;
+}
+
+export interface NativeCapability {
+  available: boolean;
+  tool?: string;
+  reason?: string;
+}
+/** Probe the daemon native picker (osascript / zenity / PowerShell). */
+export async function nativePickerCapability(): Promise<NativeCapability> {
+  try {
+    const r = await fetch('/api/native-picker/capability');
+    if (!r.ok) return { available: false, reason: `daemon responded ${r.status}` };
+    return (await r.json()) as NativeCapability;
+  } catch (e) {
+    return {
+      available: false,
+      reason: e instanceof Error ? e.message : 'daemon unreachable',
+    };
+  }
 }
 
 export function supportsHandleDrop(): boolean {
@@ -150,14 +173,44 @@ export async function resolveHandle(handle: DirHandle): Promise<PickOutcome> {
   return { kind: 'fallback', name: handle.name, error: r.error };
 }
 
+/** Phase-15 native picker: ask the daemon to open the host's OS dialog. */
+async function pickViaDaemon(): Promise<PickOutcome | null> {
+  let r: Response;
+  try {
+    r = await fetch('/api/native-picker', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'directory' }),
+    });
+  } catch {
+    return null; // daemon unreachable → caller tries the next strategy
+  }
+  if (r.status === 503) return null; // unavailable (headless / no tool)
+  const body = (await r.json().catch(() => ({}))) as {
+    path?: string;
+    cancelled?: boolean;
+    error?: string;
+  };
+  if (body.cancelled) return { kind: 'cancelled' };
+  if (body.path) {
+    const name = body.path.split(/[\\/]/).pop() ?? body.path;
+    return { kind: 'resolved', path: body.path, name };
+  }
+  return null;
+}
+
 /**
- * Open the native folder dialog (Chromium). Returns:
- *  - resolved   : daemon matched a single absolute path
- *  - candidates : multiple matches, caller lets the user choose
- *  - fallback   : unsupported browser OR no match → caller opens the modal
- *  - cancelled  : user dismissed the dialog
+ * Open a native folder dialog. Strategy (in order):
+ *   1. Daemon native picker — works on every browser; the dialog renders on
+ *      the daemon host (Mac/Linux/Windows).
+ *   2. Chromium showDirectoryPicker — secondary, browser-only, returns a
+ *      handle we resolve to an abs-path via lib/resolve.
+ *   3. Fallback — caller opens the typed-path modal.
  */
 export async function pickDirectory(): Promise<PickOutcome> {
+  const viaDaemon = await pickViaDaemon();
+  if (viaDaemon) return viaDaemon;
+
   if (!supportsDirectoryPicker()) return { kind: 'fallback' };
   let handle: DirHandle;
   try {

@@ -13,6 +13,7 @@ import { EVENT_TYPES, TASK_STATUSES, tsMsAgo, type FleetDb, type TaskStatus } fr
 import { recordAndBroadcast } from './events.js';
 import { onToolUsePost, onToolUsePre } from './hooks.js';
 import type { ModelRegistry } from './models.js';
+import { capability as nativePickerCapability, nativePick } from './native-picker.js';
 import { resolvePath } from './resolve.js';
 import { deleteRecentProject, listRecentProjects, touchRecentProject } from './recents.js';
 import { deleteMemory, getMemory, listMemories, pinMemory, updateLesson } from './memory.js';
@@ -543,6 +544,27 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       return { error: 'not found', path: p };
     }
     return { ok: true, path: p };
+  });
+
+  // ---------------- Phase 15: cross-OS native folder/file picker ----------------
+  // The dashboard probes capability so it can show a helpful banner when the
+  // daemon host is headless; the POST opens the OS dialog and returns the
+  // chosen absolute path (already denylist-filtered).
+
+  app.get('/native-picker/capability', () => nativePickerCapability());
+
+  app.post('/native-picker', async (req, reply) => {
+    const b = (req.body ?? {}) as { mode?: unknown; title?: unknown };
+    const mode = b.mode === 'file' ? 'file' : 'directory';
+    const title = typeof b.title === 'string' ? b.title : undefined;
+    const result = await nativePick(mode, title);
+    if (result.ok) return { path: result.path };
+    if ('cancelled' in result) {
+      void reply.code(200);
+      return { cancelled: true };
+    }
+    void reply.code(503);
+    return { error: result.unavailable };
   });
 
   app.get('/ws', { websocket: true }, (socket) => {

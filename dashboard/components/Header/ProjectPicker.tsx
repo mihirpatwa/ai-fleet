@@ -7,16 +7,18 @@
 import { useEffect, useState } from 'react';
 import useSWR from 'swr';
 import { App, Input, Modal, Radio, Select, Space, Tag, Tooltip, Typography } from 'antd';
-import { CheckCircleTwoTone, WarningTwoTone } from '@ant-design/icons';
+import { CheckCircleTwoTone, InfoCircleTwoTone, WarningTwoTone } from '@ant-design/icons';
 import { jsonFetcher } from '@/lib/models';
 import { useActiveProject } from '@/lib/useActiveProject';
 import {
   getCachedHandles,
   handlePermission,
+  nativePickerCapability,
   pickDirectory,
   resolveTypedPath,
   supportsDirectoryPicker,
   type DirHandle,
+  type NativeCapability,
 } from '@/lib/dirPicker';
 
 interface RecentProject {
@@ -31,7 +33,17 @@ const TYPE = '__type__';
 export function ProjectPicker() {
   const { message } = App.useApp();
   const { current, apply } = useActiveProject();
-  const native = supportsDirectoryPicker();
+  const browserNative = supportsDirectoryPicker();
+  const [daemonCap, setDaemonCap] = useState<NativeCapability | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void nativePickerCapability().then((c) => {
+      if (alive) setDaemonCap(c);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const { data: recents, mutate } = useSWR<RecentProject[]>(
     '/api/recent-projects?limit=10',
@@ -162,13 +174,18 @@ export function ProjectPicker() {
     <Space size={6} style={{ flex: '1 1 160px', minWidth: 160, maxWidth: 320 }}>
       <Tooltip
         title={
-          native
-            ? 'Native folder picker available (Chromium)'
-            : 'Browser has no folder picker — use “Type path…”'
+          daemonCap?.available
+            ? `Native folder dialog ready (${daemonCap.tool})`
+            : browserNative
+              ? 'Native folder picker (Chromium only) — daemon dialog unavailable: ' +
+                (daemonCap?.reason ?? 'unknown')
+              : `No native dialog — use Type path… (${daemonCap?.reason ?? 'daemon offline'})`
         }
       >
-        {native ? (
+        {daemonCap?.available ? (
           <CheckCircleTwoTone twoToneColor="#10b981" />
+        ) : browserNative ? (
+          <InfoCircleTwoTone twoToneColor="#3b82f6" />
         ) : (
           <WarningTwoTone twoToneColor="#f59e0b" />
         )}
