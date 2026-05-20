@@ -104,10 +104,17 @@ export function SubmitGoal({ project }: { project: string }) {
   }, [open]);
 
   const effectiveProject = wdMode !== 'current' && workdir ? workdir : project;
-  const effectiveModel = modelOverride || active?.default || '';
+  const effectiveModel =
+    modelOverride === '__adaptive__'
+      ? 'adaptive'
+      : modelOverride || active?.default || '';
 
   const modelOptions = [
     { value: '', label: `Default${active?.default ? ` — ${active.default}` : ''}` },
+    {
+      value: '__adaptive__',
+      label: 'Adaptive — pick per agent + complexity',
+    },
     ...groupByTier(models ?? []).map((g) => ({
       label: g.tier,
       title: g.tier,

@@ -22,6 +22,7 @@ import type { FleetDb, Json, Task } from './db.js';
 import { recordAndBroadcast } from './events.js';
 import { createMemoryMcp } from './mcp/memory.js';
 import { buildSdkMcpServers } from './mcp/registry.js';
+import { isAdaptive, pickAdaptiveModel } from './providers/adaptive.js';
 import { completedRetrospectorRuns, regenerateHotTier } from './memory.js';
 import {
   INJECTION_SUFFIX,
@@ -308,7 +309,12 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
         ? ownOverride
         : (ownOverride ?? readModelOverride(db.getTask(task.rootId)?.inputJson));
     const override = config.model_selection.per_task_allow_override ? rootOverride : null;
-    const model = resolveModel(config, task.assignedAgent, override);
+    // Phase 18f: "Adaptive" pseudo-override → daemon picks a real model id
+    // based on the agent role + a cheap complexity score from task.title.
+    const resolvedOverride = isAdaptive(override)
+      ? pickAdaptiveModel(config, task.assignedAgent, task.title ?? '')
+      : override;
+    const model = resolveModel(config, task.assignedAgent, resolvedOverride);
 
     // Phase 18d: reasoning effort inherited from the task's input_json (or the
     // root's, so the whole tree runs at the user's chosen level).
