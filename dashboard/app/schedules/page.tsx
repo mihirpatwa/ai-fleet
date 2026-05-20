@@ -1,20 +1,14 @@
-// Phase 10 scheduler readout. Read-only — toggling cron rows from the UI is
-// a future surface; today the daemon seeds defaults and runs them.
-import { listScheduledTasks } from '@/lib/db';
+// r5: Schedules page. Client-side fetch + CRUD via /api/schedules so the
+// dashboard reflects daemon mutations immediately.
 import { Section } from '@/components/Shell/Section';
 import { SchedulesView } from '@/components/schedules/SchedulesView';
 
 export const dynamic = 'force-dynamic';
 
 export default function SchedulesPage() {
-  const rows = listScheduledTasks();
   return (
-    <Section
-      title="Scheduled tasks"
-      subtitle={`${rows.length} cron job${rows.length === 1 ? '' : 's'}`}
-      breadcrumb={[{ title: 'Schedules' }]}
-    >
-      <SchedulesView rows={rows} />
+    <Section title="Scheduled tasks" breadcrumb={[{ title: 'Schedules' }]}>
+      <SchedulesView />
     </Section>
   );
 }

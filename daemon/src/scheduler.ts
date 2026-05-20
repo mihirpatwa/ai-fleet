@@ -100,6 +100,143 @@ const DEFAULTS: SeedDef[] = [
   },
 ];
 
+/* ---------------------------- r5 CRUD ---------------------------- */
+
+export interface ScheduledRow {
+  id: string;
+  name: string;
+  cron: string;
+  agent: string;
+  input_json: Json;
+  project_root: string | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  enabled: boolean;
+}
+
+function rowFromDb(r: Record<string, unknown>): ScheduledRow {
+  let input: Json = {};
+  try {
+    input = r['input_json'] ? (JSON.parse(String(r['input_json'])) as Json) : {};
+  } catch {
+    /* ignore */
+  }
+  return {
+    id: String(r['id']),
+    name: String(r['name']),
+    cron: String(r['cron']),
+    agent: String(r['agent']),
+    input_json: input,
+    project_root: (r['project_root'] as string) ?? null,
+    last_run_at: (r['last_run_at'] as string) ?? null,
+    next_run_at: (r['next_run_at'] as string) ?? null,
+    enabled: Number(r['enabled']) === 1,
+  };
+}
+
+export function listScheduled(db: FleetDb): ScheduledRow[] {
+  const rows = db.raw
+    .prepare(
+      `SELECT id, name, cron, agent, input_json, project_root,
+              last_run_at, next_run_at, enabled
+         FROM scheduled_tasks
+         ORDER BY name ASC`,
+    )
+    .all() as Record<string, unknown>[];
+  return rows.map(rowFromDb);
+}
+
+export interface ScheduledInput {
+  name: string;
+  cron: string;
+  agent: string;
+  project_root?: string | null;
+  input_json?: Json;
+  enabled?: boolean;
+}
+
+export function createScheduled(db: FleetDb, input: ScheduledInput): ScheduledRow {
+  // Validate cron up front — better a 400 than a row we'd disable later.
+  parseCron(input.cron);
+  const id = ulid();
+  const next = nextRun(input.cron);
+  db.raw
+    .prepare(
+      `INSERT INTO scheduled_tasks (id, name, cron, agent, input_json, project_root, next_run_at, enabled)
+       VALUES (?,?,?,?,?,?,?,?)`,
+    )
+    .run(
+      id,
+      input.name,
+      input.cron,
+      input.agent,
+      JSON.stringify(input.input_json ?? {}),
+      input.project_root ?? null,
+      next,
+      input.enabled === false ? 0 : 1,
+    );
+  return one(db, id);
+}
+
+export interface ScheduledPatch {
+  name?: string;
+  cron?: string;
+  agent?: string;
+  project_root?: string | null;
+  input_json?: Json;
+  enabled?: boolean;
+}
+
+export function updateScheduled(
+  db: FleetDb,
+  id: string,
+  patch: ScheduledPatch,
+): ScheduledRow | null {
+  const existing = oneOrNull(db, id);
+  if (!existing) return null;
+  if (patch.cron !== undefined) parseCron(patch.cron);
+  const fields: string[] = [];
+  const args: unknown[] = [];
+  const setField = (col: string, v: unknown): void => {
+    fields.push(`${col} = ?`);
+    args.push(v);
+  };
+  if (patch.name !== undefined) setField('name', patch.name);
+  if (patch.cron !== undefined) {
+    setField('cron', patch.cron);
+    setField('next_run_at', nextRun(patch.cron));
+  }
+  if (patch.agent !== undefined) setField('agent', patch.agent);
+  if (patch.project_root !== undefined) setField('project_root', patch.project_root);
+  if (patch.input_json !== undefined) setField('input_json', JSON.stringify(patch.input_json));
+  if (patch.enabled !== undefined) setField('enabled', patch.enabled ? 1 : 0);
+  if (fields.length === 0) return existing;
+  args.push(id);
+  db.raw.prepare(`UPDATE scheduled_tasks SET ${fields.join(', ')} WHERE id = ?`).run(...args);
+  return one(db, id);
+}
+
+export function deleteScheduled(db: FleetDb, id: string): boolean {
+  const r = db.raw.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
+  return r.changes > 0;
+}
+
+function one(db: FleetDb, id: string): ScheduledRow {
+  const row = oneOrNull(db, id);
+  if (!row) throw new Error(`scheduled_tasks row ${id} missing after upsert`);
+  return row;
+}
+function oneOrNull(db: FleetDb, id: string): ScheduledRow | null {
+  const r = db.raw
+    .prepare(
+      `SELECT id, name, cron, agent, input_json, project_root,
+              last_run_at, next_run_at, enabled
+         FROM scheduled_tasks WHERE id = ?`,
+    )
+    .get(id) as Record<string, unknown> | undefined;
+  return r ? rowFromDb(r) : null;
+}
+
 export interface Scheduler {
   start(): void;
   stop(): void;

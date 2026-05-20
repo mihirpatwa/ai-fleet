@@ -34,23 +34,29 @@ const ROLE_TIER: Record<string, Tier> = {
   'doc-writer': 'haiku',
 };
 
-/** Very cheap complexity score in [0,1]. Higher = harder. */
-function complexity(title: string): number {
-  const length = title.length;
-  const lenScore = Math.min(1, length / 400); // 0 at empty, 1 at ≥400 chars
-  const hardWords = /\b(refactor|migrate|architecture|design|audit|review|investigate|root cause|optimi[sz]e|debug|race|deadlock|memory leak|performance)\b/i;
-  const easyWords = /\b(rename|fix typo|add log|update copy|format|lint|comment)\b/i;
-  let score = lenScore;
-  if (hardWords.test(title)) score += 0.3;
-  if (easyWords.test(title)) score -= 0.3;
-  return Math.max(0, Math.min(1, score));
+type ComplexitySignal = 'upgrade' | 'downgrade' | 'keep';
+
+/** Detect upgrade/downgrade signals from the task title alone. The length
+ *  component only contributes to upgrade — short titles don't automatically
+ *  downgrade since most real goals are short. Easy-verb regex is the only
+ *  trigger for downgrade, so the default tier wins unless we're confident
+ *  the work is trivial. */
+function complexitySignal(title: string): ComplexitySignal {
+  const hardWords =
+    /\b(refactor|migrate|architecture|design|audit|review|investigate|root[- ]?cause|optimi[sz]e|debug|race|deadlock|memory leak|performance|benchmark|remediation)\b/i;
+  const easyWords =
+    /\b(rename|fix typo|add log|update copy|format|lint|comment|reword|tweak copy)\b/i;
+  const longEnough = title.length >= 200;
+  if (easyWords.test(title)) return 'downgrade';
+  if (hardWords.test(title) || longEnough) return 'upgrade';
+  return 'keep';
 }
 
 function upgrade(t: Tier): Tier {
-  return t === 'haiku' ? 'sonnet' : t === 'sonnet' ? 'opus' : 'opus';
+  return t === 'haiku' ? 'sonnet' : 'opus';
 }
 function downgrade(t: Tier): Tier {
-  return t === 'opus' ? 'sonnet' : t === 'sonnet' ? 'haiku' : 'haiku';
+  return t === 'opus' ? 'sonnet' : 'haiku';
 }
 
 /** Map a tier to a real model id, preferring values from config so the user's
@@ -74,8 +80,8 @@ export function pickAdaptiveModel(
   title: string,
 ): string {
   let tier: Tier = ROLE_TIER[agent] ?? 'sonnet';
-  const c = complexity(title);
-  if (c >= 0.8) tier = upgrade(tier);
-  else if (c <= 0.15) tier = downgrade(tier);
+  const signal = complexitySignal(title);
+  if (signal === 'upgrade') tier = upgrade(tier);
+  else if (signal === 'downgrade') tier = downgrade(tier);
   return tierToModel(tier, config);
 }

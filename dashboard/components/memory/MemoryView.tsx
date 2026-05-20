@@ -1,10 +1,12 @@
 'use client';
-// Adaptive memory table. Native table + GET form → Antd Table + Select/Input
-// filters. project/agent/tag are server filters (push to ?query, lib/db
-// refilters); confidence/used/created sort client-side via Table sorters.
+// Adaptive memory table. project/agent/tag/q are server filters (push to
+// ?query, lib/db refilters); confidence/used/created sort client-side via
+// Table sorters. r6: matches the Goals filter bar — adds a free-text search
+// + Clear button + count summary.
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Input, Select, Space, Table, Tag, Typography } from 'antd';
+import { Button, Input, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { ClearOutlined } from '@ant-design/icons';
 import type { Memory } from '@/lib/types';
 import { roleColor } from '@/lib/theme';
 import { ago, parseTs, pretty } from '@/lib/format';
@@ -23,7 +25,7 @@ export function MemoryView({
   rows: Memory[];
   projects: string[];
   agents: string[];
-  sp: { project?: string; agent?: string; tag?: string };
+  sp: { project?: string; agent?: string; tag?: string; q?: string };
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -33,8 +35,13 @@ export function MemoryView({
     const q = new URLSearchParams(params.toString());
     if (value) q.set(key, value);
     else q.delete(key);
-    router.push(`${pathname}?${q.toString()}`);
+    const qs = q.toString();
+    router.push(qs ? `${pathname}?${qs}` : pathname);
   }
+  function clearAll(): void {
+    router.push(pathname);
+  }
+  const filtersActive = Boolean(sp.project || sp.agent || sp.tag || sp.q);
 
   const columns: ColumnsType<Memory> = [
     {
@@ -93,7 +100,7 @@ export function MemoryView({
 
   return (
     <>
-      <Space wrap size={12} style={{ marginBottom: 16 }}>
+      <Space wrap size={[12, 8]} style={{ marginBottom: 16, width: '100%' }}>
         <Select
           allowClear
           placeholder="All projects"
@@ -111,12 +118,25 @@ export function MemoryView({
           options={agents.map((a) => ({ value: a, label: a }))}
         />
         <Input.Search
-          placeholder="tag"
+          placeholder="Tag"
           defaultValue={sp.tag ?? ''}
           allowClear
           style={{ width: 160 }}
           onSearch={(v) => setFilter('tag', v || undefined)}
         />
+        <Input.Search
+          placeholder="Search lesson/context…"
+          defaultValue={sp.q ?? ''}
+          allowClear
+          style={{ width: 240 }}
+          onSearch={(v) => setFilter('q', v.trim() || undefined)}
+        />
+        <Button icon={<ClearOutlined />} disabled={!filtersActive} onClick={clearAll}>
+          Clear
+        </Button>
+        <Typography.Text type="secondary" style={{ marginLeft: 'auto', fontSize: 12 }}>
+          {rows.length} lesson{rows.length === 1 ? '' : 's'}
+        </Typography.Text>
       </Space>
       <Table<Memory>
         rowKey="id"

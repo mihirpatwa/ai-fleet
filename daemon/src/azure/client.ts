@@ -10,6 +10,7 @@ import type {
   WorkItemAttachment,
   WorkItemComment,
   WorkItemDetail,
+  WorkItemListPage,
   WorkItemRelation,
   WorkItemSummary,
 } from './types.js';
@@ -149,11 +150,17 @@ export async function listWorkItems(
   project: string,
   pat: string,
   filter: ListFilter = {},
-): Promise<WorkItemSummary[]> {
+): Promise<WorkItemListPage> {
   const wiqlUrl = `${joinOrgProject(orgUrl, project)}/_apis/wit/wiql?api-version=${API_VERSION}`;
   const wiql = await postJson<WiqlResp>(wiqlUrl, pat, { query: buildWiql(project, filter) });
-  const ids = (wiql.workItems ?? []).map((w) => w.id).slice(0, filter.limit ?? 100);
-  if (ids.length === 0) return [];
+  const allIds = (wiql.workItems ?? []).map((w) => w.id);
+  const total = allIds.length;
+  const pageSize = Math.max(1, Math.min(200, filter.pageSize ?? 50));
+  const page = Math.max(0, filter.page ?? 0);
+  const ids = allIds.slice(page * pageSize, page * pageSize + pageSize);
+  if (ids.length === 0) {
+    return { items: [], total, page, pageSize };
+  }
 
   // Batch endpoint accepts up to 200 ids per request.
   const fields = [
@@ -169,7 +176,17 @@ export async function listWorkItems(
     ',',
   )}&fields=${encodeURIComponent(fields)}&api-version=${API_VERSION}`;
   const body = await fetchJson<WorkItemBatch>(url, pat);
-  return body.value.map((w) => summaryFromFields(w.id, w.fields, w.url));
+  // The batch endpoint may reorder ids; map then resort by the wiql order so
+  // ChangedDate-desc still wins.
+  const byId = new Map(
+    body.value.map((w) => [w.id, summaryFromFields(w.id, w.fields, w.url)]),
+  );
+  const items: WorkItemSummary[] = [];
+  for (const id of ids) {
+    const x = byId.get(id);
+    if (x) items.push(x);
+  }
+  return { items, total, page, pageSize };
 }
 
 /* ---------------------------- detail ---------------------------- */
@@ -290,6 +307,40 @@ export async function listComments(
   } catch {
     // Comments preview API can 404 on old collections — degrade quietly.
     return [];
+  }
+}
+
+/* ---------------------------- state mutation ---------------------------- */
+
+interface PatchOp {
+  op: 'add' | 'replace' | 'remove' | 'test';
+  path: string;
+  value?: unknown;
+}
+
+/** PATCH a work item's state via the JSON Patch endpoint. */
+export async function updateWorkItemState(
+  orgUrl: string,
+  project: string,
+  id: number,
+  newState: string,
+  pat: string,
+): Promise<void> {
+  const url = `${joinOrgProject(orgUrl, project)}/_apis/wit/workitems/${id}?api-version=${API_VERSION}`;
+  const ops: PatchOp[] = [{ op: 'add', path: '/fields/System.State', value: newState }];
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      Authorization: authHeader(pat),
+      Accept: 'application/json',
+      'content-type': 'application/json-patch+json',
+    },
+    body: JSON.stringify(ops),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Azure ${res.status}: ${text.slice(0, 240)}`);
   }
 }
 

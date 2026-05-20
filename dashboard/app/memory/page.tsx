@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 export default async function MemoryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ project?: string; agent?: string; tag?: string }>;
+  searchParams: Promise<{ project?: string; agent?: string; tag?: string; q?: string }>;
 }) {
   const sp = await searchParams;
   const project = await getActiveProject(sp.project, undefined);
@@ -17,6 +17,7 @@ export default async function MemoryPage({
     ...(project ? { project } : {}),
     ...(sp.agent ? { agent: sp.agent } : {}),
     ...(sp.tag ? { tag: sp.tag } : {}),
+    ...(sp.q ? { q: sp.q } : {}),
     sort: 'confidence',
     dir: 'desc',
   });
@@ -24,7 +25,7 @@ export default async function MemoryPage({
   return (
     <Section
       title="Adaptive memory"
-      subtitle={`${rows.length} lesson(s)`}
+      subtitle={`${rows.length} lesson${rows.length === 1 ? '' : 's'}`}
       breadcrumb={[{ title: 'Memory' }]}
     >
       <MemoryView rows={rows} projects={memoryProjects()} agents={memoryAgents()} sp={sp} />

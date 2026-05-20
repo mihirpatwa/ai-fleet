@@ -1,16 +1,8 @@
-// Phase 18g proxy: full Azure work-item detail (GET) + state mutation (PATCH).
+// r5: per-id schedules proxies — PATCH (update) + DELETE.
 import { proxy } from '@/lib/daemon';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-export async function GET(
-  _req: Request,
-  { params }: { params: Promise<{ id: string }> },
-): Promise<Response> {
-  const { id } = await params;
-  return proxy(`/azure/work-items/${encodeURIComponent(id)}`);
-}
 
 export async function PATCH(
   req: Request,
@@ -18,9 +10,17 @@ export async function PATCH(
 ): Promise<Response> {
   const { id } = await params;
   const body = await req.text();
-  return proxy(`/azure/work-items/${encodeURIComponent(id)}`, {
+  return proxy(`/schedules/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body,
   });
+}
+
+export async function DELETE(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> },
+): Promise<Response> {
+  const { id } = await params;
+  return proxy(`/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }

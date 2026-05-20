@@ -21,11 +21,18 @@ import {
   type McpServerConfig,
 } from './mcp/registry.js';
 import {
+  createScheduled as createScheduledRow,
+  deleteScheduled as deleteScheduledRow,
+  listScheduled as listScheduledFromDb,
+  updateScheduled as updateScheduledRow,
+} from './scheduler.js';
+import {
   fetchAttachment as azureFetchAttachment,
   getWorkItem as azureGetWorkItem,
   listComments as azureListComments,
   listStatesForType as azureListStates,
   listWorkItems as azureListWorkItems,
+  updateWorkItemState as azureUpdateState,
   validateConnection as azureValidate,
 } from './azure/client.js';
 import {
@@ -175,6 +182,14 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   });
 
   app.post('/tasks', (req, reply) => {
+    // q11: server-side gate. The dashboard already disables [+ New goal] when
+    // disconnected, but a direct API caller (CLI, curl) would otherwise spawn
+    // an agent with no credentials and burn retries on hard auth failures.
+    const provider = currentState();
+    if (!provider.connected) {
+      void reply.code(409);
+      return { error: provider.error ?? 'no AI provider connected' };
+    }
     const parsed = createTaskBody.safeParse(req.body);
     if (!parsed.success) {
       void reply.code(400);
@@ -646,6 +661,71 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     return result;
   });
 
+  // ---------------- r5: Schedules CRUD ----------------
+
+  app.get('/schedules', () => ({ schedules: listScheduledFromDb(db) }));
+
+  app.post('/schedules', (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const name = typeof b['name'] === 'string' ? b['name'].trim() : '';
+    const cron = typeof b['cron'] === 'string' ? b['cron'].trim() : '';
+    const agent = typeof b['agent'] === 'string' ? b['agent'].trim() : '';
+    if (!name || !cron || !agent) {
+      void reply.code(400);
+      return { error: 'body { name, cron, agent } required' };
+    }
+    try {
+      const row = createScheduledRow(db, {
+        name,
+        cron,
+        agent,
+        project_root: (b['project_root'] as string) ?? null,
+        input_json: (b['input_json'] ?? {}) as never,
+        enabled: b['enabled'] === false ? false : true,
+      });
+      logger.info({ id: row.id, name: row.name }, 'scheduled task created');
+      return row;
+    } catch (err) {
+      void reply.code(400);
+      return { error: err instanceof Error ? err.message : 'create failed' };
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>('/schedules/:id', (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      const row = updateScheduledRow(db, req.params.id, {
+        ...(typeof b['name'] === 'string' ? { name: b['name'] } : {}),
+        ...(typeof b['cron'] === 'string' ? { cron: b['cron'] } : {}),
+        ...(typeof b['agent'] === 'string' ? { agent: b['agent'] } : {}),
+        ...('project_root' in b
+          ? { project_root: (b['project_root'] as string) ?? null }
+          : {}),
+        ...('input_json' in b
+          ? { input_json: (b['input_json'] ?? {}) as never }
+          : {}),
+        ...(typeof b['enabled'] === 'boolean' ? { enabled: b['enabled'] } : {}),
+      });
+      if (!row) {
+        void reply.code(404);
+        return { error: 'not found' };
+      }
+      return row;
+    } catch (err) {
+      void reply.code(400);
+      return { error: err instanceof Error ? err.message : 'update failed' };
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>('/schedules/:id', (req, reply) => {
+    const ok = deleteScheduledRow(db, req.params.id);
+    if (!ok) {
+      void reply.code(404);
+      return { error: 'not found' };
+    }
+    return { ok: true };
+  });
+
   // ---------------- Phase 18g: Azure Boards ----------------
   // Connection lives in ~/.aifleet/azure.json + AZURE_DEVOPS_PAT secret.
   // Work-item endpoints are thin wrappers around the WIQL + workitems REST
@@ -694,11 +774,14 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       ...(q['area_path'] ? { area_path: q['area_path'] } : {}),
       ...(q['tag'] ? { tag: q['tag'] } : {}),
       ...(q['search'] ? { search: q['search'] } : {}),
-      limit: q['limit'] ? Math.max(1, Math.min(200, Number(q['limit']) || 100)) : 100,
+      ...(q['page'] ? { page: Math.max(0, Number(q['page']) || 0) } : {}),
+      ...(q['pageSize']
+        ? { pageSize: Math.max(1, Math.min(200, Number(q['pageSize']) || 50)) }
+        : { pageSize: 50 }),
     };
     try {
-      const items = await azureListWorkItems(state.org_url, state.project, pat, filter);
-      return { items };
+      const result = await azureListWorkItems(state.org_url, state.project, pat, filter);
+      return result;
     } catch (err) {
       void reply.code(502);
       return { error: err instanceof Error ? err.message : 'azure call failed' };
@@ -719,6 +802,34 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     }
     try {
       const item = await azureGetWorkItem(state.org_url, state.project, id, pat);
+      return item;
+    } catch (err) {
+      void reply.code(502);
+      return { error: err instanceof Error ? err.message : 'azure call failed' };
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>('/azure/work-items/:id', async (req, reply) => {
+    const azureState = currentAzureState();
+    const pat = currentAzurePat();
+    if (!azureState.connected || !pat) {
+      void reply.code(409);
+      return { error: azureState.error ?? 'azure not connected' };
+    }
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      void reply.code(400);
+      return { error: 'id must be a positive integer' };
+    }
+    const b = (req.body ?? {}) as { state?: unknown };
+    if (typeof b.state !== 'string' || !b.state.trim()) {
+      void reply.code(400);
+      return { error: 'body.state required' };
+    }
+    try {
+      await azureUpdateState(azureState.org_url, azureState.project, id, b.state, pat);
+      const item = await azureGetWorkItem(azureState.org_url, azureState.project, id, pat);
+      logger.info({ id, state: b.state }, 'azure work item state updated');
       return item;
     } catch (err) {
       void reply.code(502);

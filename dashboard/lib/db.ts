@@ -398,6 +398,8 @@ export interface MemoryFilter {
   project?: string;
   agent?: string;
   tag?: string;
+  /** r6: free-text search across context + lesson_json. */
+  q?: string;
   sort?: 'confidence' | 'used' | 'recent';
   dir?: 'asc' | 'desc';
 }
@@ -413,6 +415,11 @@ export function listMemoriesDash(f: MemoryFilter = {}): Memory[] {
     if (f.agent) {
       where.push('agent = ?');
       args.push(f.agent);
+    }
+    if (f.q) {
+      where.push('(context LIKE ? OR lesson_json LIKE ?)');
+      const pattern = `%${f.q.replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
+      args.push(pattern, pattern);
     }
     const col =
       f.sort === 'used' ? 'used_count' : f.sort === 'recent' ? 'created_at' : 'confidence';

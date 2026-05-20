@@ -72,6 +72,8 @@ export function WorkItemsView() {
     tag?: string;
     search?: string;
   }>({});
+  const [page, setPage] = useState(1); // 1-based for Antd
+  const [pageSize, setPageSize] = useState(25);
   const [openId, setOpenId] = useState<number | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
 
@@ -91,14 +93,16 @@ export function WorkItemsView() {
   const stateOptions = (statesData?.states ?? []).map((s) => ({ value: s, label: s }));
 
   const listKey = conn?.connected
-    ? `/api/azure/work-items?${buildQuery(filters)}`
+    ? `/api/azure/work-items?${buildQuery(filters, page - 1, pageSize)}`
     : null;
-  const { data: listData, error: listError, isLoading } = useSWR<{ items: WorkItemSummary[] }>(
-    listKey,
-    jsonFetcher,
-    { revalidateOnFocus: false },
-  );
+  const { data: listData, error: listError, isLoading } = useSWR<{
+    items: WorkItemSummary[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }>(listKey, jsonFetcher, { revalidateOnFocus: false });
   const items = listData?.items ?? [];
+  const total = listData?.total ?? items.length;
 
   // Derive assignee / iteration / tag options from the loaded items so the
   // dropdowns only contain values that actually exist in the project.
@@ -117,7 +121,7 @@ export function WorkItemsView() {
     [items],
   );
 
-  const { data: detail } = useSWR<WorkItemDetail>(
+  const { data: detail, mutate: mutateDetail } = useSWR<WorkItemDetail>(
     openId && conn?.connected ? `/api/azure/work-items/${openId}` : null,
     jsonFetcher,
     { revalidateOnFocus: false },
@@ -127,6 +131,27 @@ export function WorkItemsView() {
     jsonFetcher,
     { revalidateOnFocus: false },
   );
+
+  // q7: PATCH the work item's System.State and refresh both the drawer detail
+  // and the list (so the table shows the new state immediately).
+  async function changeState(id: number, nextState: string): Promise<void> {
+    try {
+      const res = await fetch(`/api/azure/work-items/${id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ state: nextState }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(body.error ?? `daemon returned ${res.status}`);
+      message.success(`#${id} → ${nextState}`);
+      // Re-fetch list (state changed) and re-set detail to the daemon's reply.
+      await mutateDetail();
+      // Cheap force-revalidate the list query — null-safe.
+      if (listKey) void fetch(listKey).catch(() => undefined);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'state update failed');
+    }
+  }
 
   function sendAsGoal(item: WorkItemDetail): void {
     const prompt = workItemToGoal(item);
@@ -207,12 +232,14 @@ export function WorkItemsView() {
 
   return (
     <div>
+      {/* q3: each filter has flex-basis so they collapse to ~full width on
+          xs and pack 2–3 per row on sm/md. */}
       <Space wrap style={{ marginBottom: 16, width: '100%' }} size={[12, 8]}>
         <Select
           mode="multiple"
           allowClear
           placeholder="Type"
-          style={{ minWidth: 220 }}
+          style={{ flex: '1 1 200px', minWidth: 160, maxWidth: 320 }}
           value={filters.type}
           onChange={(type) => setFilters((f) => ({ ...f, type }))}
           options={TYPES.map((t) => ({ value: t, label: t }))}
@@ -221,7 +248,7 @@ export function WorkItemsView() {
           mode="multiple"
           allowClear
           placeholder={statesData ? 'State' : 'Loading states…'}
-          style={{ minWidth: 220 }}
+          style={{ flex: '1 1 200px', minWidth: 160, maxWidth: 320 }}
           value={filters.state}
           onChange={(state) => setFilters((f) => ({ ...f, state }))}
           options={stateOptions}
@@ -230,7 +257,7 @@ export function WorkItemsView() {
         <Select
           allowClear
           placeholder="Assignee"
-          style={{ minWidth: 200 }}
+          style={{ flex: '1 1 180px', minWidth: 140, maxWidth: 240 }}
           value={filters.assigned_to}
           onChange={(assigned_to) => setFilters((f) => ({ ...f, assigned_to }))}
           options={assigneeOptions}
@@ -239,7 +266,7 @@ export function WorkItemsView() {
         <Select
           allowClear
           placeholder="Iteration"
-          style={{ minWidth: 220 }}
+          style={{ flex: '1 1 200px', minWidth: 160, maxWidth: 280 }}
           value={filters.iteration_path}
           onChange={(iteration_path) => setFilters((f) => ({ ...f, iteration_path }))}
           options={iterationOptions}
@@ -248,7 +275,7 @@ export function WorkItemsView() {
         <Input
           allowClear
           placeholder="Tag"
-          style={{ width: 140 }}
+          style={{ flex: '0 1 140px', minWidth: 110 }}
           value={filters.tag}
           onChange={(e) =>
             setFilters((f) => ({ ...f, tag: e.target.value || undefined }))
@@ -257,7 +284,7 @@ export function WorkItemsView() {
         <Input.Search
           allowClear
           placeholder="Search title…"
-          style={{ width: 220 }}
+          style={{ flex: '1 1 200px', minWidth: 160 }}
           onSearch={(search) =>
             setFilters((f) => ({ ...f, search: search.trim() || undefined }))
           }
@@ -265,12 +292,15 @@ export function WorkItemsView() {
         <Button icon={<ClearOutlined />} onClick={() => setFilters({})}>
           Clear
         </Button>
-        <Text type="secondary" style={{ marginLeft: 'auto', fontSize: 12 }}>
-          {items.length} item{items.length === 1 ? '' : 's'} · {conn.org_url}/{conn.project}
-        </Text>
         <Button size="small" onClick={() => setConnectOpen(true)}>
           Connection
         </Button>
+        <Text
+          type="secondary"
+          style={{ marginLeft: 'auto', fontSize: 12, wordBreak: 'break-all' }}
+        >
+          {total} item{total === 1 ? '' : 's'} · {conn.org_url}/{conn.project}
+        </Text>
       </Space>
 
       {listError && (
@@ -289,7 +319,20 @@ export function WorkItemsView() {
         loading={isLoading}
         columns={columns}
         dataSource={items}
-        pagination={{ pageSize: 25, hideOnSinglePage: true }}
+        pagination={{
+          current: page,
+          pageSize,
+          total,
+          showSizeChanger: true,
+          pageSizeOptions: [25, 50, 100, 200],
+          showTotal: (n, range) => `${range[0]}–${range[1]} of ${n}`,
+          onChange: (p, s) => {
+            setPage(p);
+            setPageSize(s);
+          },
+        }}
+        // q3: horizontal scroll keeps the table usable at 375px wide.
+        scroll={{ x: 'max-content' }}
         locale={{
           emptyText:
             'No work items match these filters. Clear filters or widen the search.',
@@ -299,7 +342,10 @@ export function WorkItemsView() {
       <Drawer
         open={openId !== null}
         onClose={() => setOpenId(null)}
-        width={840}
+        // q3: never wider than the viewport — Drawer clamps to 100vw when the
+        // numeric width exceeds it but the explicit min keeps it readable on
+        // small phones too.
+        width="min(840px, 100vw)"
         title={
           detail ? (
             <Space>
@@ -314,7 +360,7 @@ export function WorkItemsView() {
         extra={
           detail && (
             <Space>
-              <Link href={detail.url} target="_blank">
+              <Link href={azureWebUrl(conn, detail.id)} target="_blank">
                 <Button>Open in Azure</Button>
               </Link>
               <Button
@@ -333,6 +379,8 @@ export function WorkItemsView() {
             item={detail}
             comments={commentsData?.comments ?? []}
             orgUrl={conn.org_url}
+            states={statesData?.states ?? []}
+            onChangeState={(next) => changeState(detail.id, next)}
           />
         )}
       </Drawer>
@@ -356,15 +404,19 @@ function WorkItemBody({
   item,
   comments,
   orgUrl,
+  states,
+  onChangeState,
 }: {
   item: WorkItemDetail;
   comments: WorkItemComment[];
   orgUrl: string;
+  states: string[];
+  onChangeState: (next: string) => void | Promise<void>;
 }) {
   const grouped = groupRelations(item.relations);
   return (
     <Space direction="vertical" size={20} style={{ width: '100%' }}>
-      <MetaStrip item={item} />
+      <MetaStrip item={item} states={states} onChangeState={onChangeState} />
 
       {item.description_html && (
         <Section title="Description">
@@ -432,9 +484,34 @@ interface MetaRow {
   label: string;
   value: React.ReactNode;
 }
-function MetaStrip({ item }: { item: WorkItemDetail }) {
+function MetaStrip({
+  item,
+  states,
+  onChangeState,
+}: {
+  item: WorkItemDetail;
+  states: string[];
+  onChangeState: (next: string) => void | Promise<void>;
+}) {
+  // q7: state is editable. The Select shows the union of states the workflow
+  // exposes; switching dispatches a PATCH. Read-only fallback to a Tag when
+  // no states are loaded yet (offline / first paint).
+  const stateValue =
+    states.length === 0 ? (
+      <Tag>{item.state}</Tag>
+    ) : (
+      <Select
+        size="small"
+        value={item.state}
+        onChange={(next) => void onChangeState(next)}
+        style={{ minWidth: 160 }}
+        options={Array.from(new Set([item.state, ...states]))
+          .filter(Boolean)
+          .map((s) => ({ value: s, label: s }))}
+      />
+    );
   const rows: (MetaRow | null)[] = [
-    { label: 'State', value: <Tag>{item.state}</Tag> },
+    { label: 'State', value: stateValue },
     item.assigned_to ? { label: 'Assigned', value: <Tag color="blue">{item.assigned_to}</Tag> } : null,
     item.created_by
       ? {
@@ -736,14 +813,18 @@ function ConnectModal({
 
 /* ----------------------------- helpers ---------------------------- */
 
-function buildQuery(f: {
-  type?: string[];
-  state?: string[];
-  assigned_to?: string;
-  iteration_path?: string;
-  tag?: string;
-  search?: string;
-}): string {
+function buildQuery(
+  f: {
+    type?: string[];
+    state?: string[];
+    assigned_to?: string;
+    iteration_path?: string;
+    tag?: string;
+    search?: string;
+  },
+  page: number,
+  pageSize: number,
+): string {
   const p = new URLSearchParams();
   if (f.type && f.type.length > 0) p.set('type', f.type.join(','));
   if (f.state && f.state.length > 0) p.set('state', f.state.join(','));
@@ -751,6 +832,8 @@ function buildQuery(f: {
   if (f.iteration_path) p.set('iteration_path', f.iteration_path);
   if (f.tag) p.set('tag', f.tag);
   if (f.search) p.set('search', f.search);
+  p.set('page', String(page));
+  p.set('pageSize', String(pageSize));
   return p.toString();
 }
 
@@ -775,4 +858,13 @@ function formatDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString();
+}
+
+/** r4: build the web URL Azure renders this work item at. `detail.url` is the
+ *  REST endpoint (`.../_apis/wit/workItems/123`) which 404s for humans. The
+ *  proper deep link lives at `<org>/<project>/_workitems/edit/<id>`. */
+function azureWebUrl(conn: AzureConnectionState | undefined, id: number): string {
+  if (!conn) return '#';
+  const org = conn.org_url.replace(/\/+$/, '');
+  return `${org}/${encodeURIComponent(conn.project)}/_workitems/edit/${id}`;
 }

@@ -73,5 +73,15 @@ export interface ListFilter {
   area_path?: string;
   tag?: string;
   search?: string;
-  limit?: number;
+  /** r2: page index (0-based) over the WIQL-returned id list. */
+  page?: number;
+  /** r2: page size (default 50, max 200). */
+  pageSize?: number;
+}
+
+export interface WorkItemListPage {
+  items: WorkItemSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
 }

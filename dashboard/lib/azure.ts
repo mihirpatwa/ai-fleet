@@ -62,27 +62,63 @@ export interface WorkItemComment {
   modified_date?: string;
 }
 
-/** Strip dangerous tags + on*-handler attributes. Optionally rewrite img/href
- *  pointing at the connected Azure org so the daemon's PAT-authed proxy
- *  serves them (otherwise the browser sees 401s on rendered content). */
+// q12: prefer isomorphic-dompurify (real HTML parser + allowlist) over a
+// regex strip. The regex version stayed in the codebase as a fallback for
+// any environment where dompurify can't be loaded (e.g. the unit test SSR
+// path before jsdom mounts).
+import DOMPurify from 'isomorphic-dompurify';
+
+const FALLBACK_RE = {
+  killTags: /<\/?(script|style|iframe|object|embed|link|meta)[^>]*>/gi,
+  killHandlers: /\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi,
+  killJs: /javascript:/gi,
+};
+
+function regexFallback(html: string): string {
+  return html
+    .replace(FALLBACK_RE.killTags, '')
+    .replace(FALLBACK_RE.killHandlers, '')
+    .replace(FALLBACK_RE.killJs, '');
+}
+
+/** Run HTML through DOMPurify; rewrite `src`/`href` that point at the
+ *  connected Azure org through the PAT-authed daemon proxy so inline
+ *  images and links render without leaking the token. */
 export function sanitizeHtml(html: string | null, orgUrl?: string): string {
   if (!html) return '';
-  let out = html
-    .replace(/<\/?(script|style|iframe|object|embed|link|meta)[^>]*>/gi, '')
-    .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-    .replace(/javascript:/gi, '');
-  if (orgUrl) {
-    const org = orgUrl.replace(/\/+$/, '');
-    const escapedOrg = org.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // Rewrite src/href that point at this Azure org through the proxy so
-    // images/videos render with authentication.
-    const re = new RegExp(`(src|href)\\s*=\\s*"(${escapedOrg}/[^"]+)"`, 'gi');
-    out = out.replace(re, (_m, attr: string, url: string) => {
-      const proxied = `/api/azure/attachment?url=${encodeURIComponent(url)}`;
-      return `${attr}="${proxied}"`;
+  let cleaned: string;
+  try {
+    cleaned = DOMPurify.sanitize(html, {
+      USE_PROFILES: { html: true },
+      ALLOWED_ATTR: [
+        'href',
+        'src',
+        'alt',
+        'title',
+        'class',
+        'style',
+        'width',
+        'height',
+        'target',
+        'rel',
+        'colspan',
+        'rowspan',
+        'align',
+      ],
+      FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'meta', 'link'],
     });
+  } catch {
+    // dompurify can throw in odd SSR setups; the regex strip is a last resort.
+    cleaned = regexFallback(html);
   }
-  return out;
+  if (!orgUrl) return cleaned;
+  const org = orgUrl.replace(/\/+$/, '');
+  const escapedOrg = org.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(src|href)\\s*=\\s*"(${escapedOrg}/[^"]+)"`, 'gi');
+  return cleaned.replace(re, (_m, attr: string, url: string) => {
+    const proxied = `/api/azure/attachment?url=${encodeURIComponent(url)}`;
+    return `${attr}="${proxied}"`;
+  });
 }
 
 /** Group raw relations into UX-friendly buckets so the drawer can render

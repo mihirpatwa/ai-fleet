@@ -30,10 +30,12 @@ describe('resolveModel', () => {
     expect(resolveModel(c, 'coder')).toBe('claude-sonnet-4-6');
   });
 
-  it('honors per_agent_models overrides first', () => {
-    const c = parseConfig({ per_agent_models: { coder: 'claude-opus-4-7' } });
-    expect(resolveModel(c, 'coder')).toBe('claude-opus-4-7');
-    expect(resolveModel(c, 'orchestrator')).toBe('claude-opus-4-7');
+  it('honors per-task override before the role defaults', () => {
+    // Phase 18a dropped per_agent — only the per-task override + orchestrator
+    // special-case remain. The override wins for every agent it's passed for.
+    const c = parseConfig({});
+    expect(resolveModel(c, 'coder', 'claude-opus-4-7')).toBe('claude-opus-4-7');
+    expect(resolveModel(c, 'orchestrator', 'claude-haiku-4-5')).toBe('claude-haiku-4-5');
   });
 });
 

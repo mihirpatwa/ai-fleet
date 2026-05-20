@@ -345,8 +345,25 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
     db.updateTask(task.id, { status: 'running' }); // auto-stamps started_at
     const started = db.getTask(task.id);
     const startedAt = started?.startedAt ?? nowTs();
-    emit(task, 'started', { agent: task.assignedAgent, model });
-    logger.info({ taskId: task.id, agent: task.assignedAgent, model }, 'spawning agent');
+    // r10: record the effort + how the model was chosen so the task detail
+    // panel can show "adaptive → claude-opus-4-7" rather than a bare id.
+    const modelSource: 'override' | 'adaptive' | 'orchestrator' | 'default' = isAdaptive(override)
+      ? 'adaptive'
+      : override
+        ? 'override'
+        : task.assignedAgent === 'orchestrator'
+          ? 'orchestrator'
+          : 'default';
+    emit(task, 'started', {
+      agent: task.assignedAgent,
+      model,
+      model_source: modelSource,
+      ...(effort ? { effort } : {}),
+    });
+    logger.info(
+      { taskId: task.id, agent: task.assignedAgent, model, modelSource, effort },
+      'spawning agent',
+    );
 
     // Adaptive memory: shadow window is per-project (first N retrospect runs).
     const priorRetro = completedRetrospectorRuns(db, task.projectRoot);
