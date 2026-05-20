@@ -4,7 +4,7 @@
 // toggle + env-var inputs for those that need credentials. Custom servers
 // (user-added) get an edit/delete row. The daemon merges every enabled
 // server into Claude SDK options.mcpServers per spawn.
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import useSWR from 'swr';
 import {
   App,
@@ -75,6 +75,45 @@ export function McpSection() {
   });
   const [editing, setEditing] = useState<McpServer | null>(null);
   const [probes, setProbes] = useState<Record<string, ProbeState>>({});
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+  const importInput = useRef<HTMLInputElement | null>(null);
+
+  async function exportConfig(): Promise<void> {
+    try {
+      const res = await fetch('/api/mcp-servers/export');
+      if (!res.ok) throw new Error(`daemon returned ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `aifleet-mcp-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      message.success('Exported');
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'export failed');
+    }
+  }
+
+  async function importConfig(file: File, mode: 'merge' | 'replace'): Promise<void> {
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text) as { servers?: unknown };
+      const res = await fetch('/api/mcp-servers/import', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...payload, mode }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { count?: number; error?: string };
+      if (!res.ok) throw new Error(body.error ?? `daemon returned ${res.status}`);
+      message.success(`Imported ${body.count ?? 0} servers (${mode})`);
+      await mutate();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'import failed');
+    }
+  }
 
   async function probe(name: string): Promise<void> {
     setProbes((p) => ({ ...p, [name]: { loading: true } }));
@@ -215,13 +254,36 @@ export function McpSection() {
           );
         })}
 
-        <Space>
+        <Space wrap>
           <Button icon={<PlusOutlined />} onClick={() => setEditing(blankCustom())}>
             Add custom MCP
           </Button>
           <Button icon={<ReloadOutlined />} onClick={() => void mutate()}>
             Refresh
           </Button>
+          <Button onClick={() => void exportConfig()}>Export…</Button>
+          <Button onClick={() => importInput.current?.click()}>Import…</Button>
+          <input
+            ref={importInput}
+            type="file"
+            accept="application/json,.json"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void importConfig(file, importMode);
+              if (e.target) e.target.value = '';
+            }}
+          />
+          <Select
+            size="small"
+            value={importMode}
+            onChange={(v) => setImportMode(v)}
+            style={{ width: 110 }}
+            options={[
+              { value: 'merge', label: 'merge' },
+              { value: 'replace', label: 'replace' },
+            ]}
+          />
         </Space>
       </Space>
 

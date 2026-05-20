@@ -15,6 +15,8 @@ import { onToolUsePost, onToolUsePre } from './hooks.js';
 import {
   PRESETS as MCP_PRESETS,
   deleteServer as deleteMcpServer,
+  exportServers as exportMcpServers,
+  importServers as importMcpServers,
   listMergedServers as listMcpServers,
   probeServer as probeMcpServer,
   upsertServer as upsertMcpServer,
@@ -24,15 +26,18 @@ import {
   createScheduled as createScheduledRow,
   deleteScheduled as deleteScheduledRow,
   listScheduled as listScheduledFromDb,
+  previewRuns as cronPreview,
+  runScheduledNow as runScheduledNowFn,
   updateScheduled as updateScheduledRow,
 } from './scheduler.js';
 import {
+  addComment as azureAddComment,
   fetchAttachment as azureFetchAttachment,
   getWorkItem as azureGetWorkItem,
   listComments as azureListComments,
   listStatesForType as azureListStates,
   listWorkItems as azureListWorkItems,
-  updateWorkItemState as azureUpdateState,
+  updateWorkItem as azureUpdateWorkItem,
   validateConnection as azureValidate,
 } from './azure/client.js';
 import {
@@ -645,6 +650,22 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     return { servers: merged };
   });
 
+  // q9: share MCP config across machines. GET returns the stored rows (no
+  // presets — those rebound on the target host); POST applies the payload.
+  app.get('/mcp-servers/export', () => exportMcpServers());
+  app.post('/mcp-servers/import', (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const mode = b['mode'] === 'replace' ? 'replace' : 'merge';
+    try {
+      const out = importMcpServers(b, mode);
+      logger.info({ mode, count: out.count }, 'mcp servers imported');
+      return out;
+    } catch (err) {
+      void reply.code(400);
+      return { error: err instanceof Error ? err.message : 'import failed' };
+    }
+  });
+
   // p4: cheap "does this thing actually run?" probe used by Settings to show
   // a green/red dot per server. Spawns the command for up to 4s; if the
   // process is still alive then, we consider it healthy (MCP stdio servers
@@ -664,6 +685,15 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // ---------------- r5: Schedules CRUD ----------------
 
   app.get('/schedules', () => ({ schedules: listScheduledFromDb(db) }));
+
+  // s3: live cron validator + next-fire preview for the edit modal.
+  app.get('/schedules/preview', (req) => {
+    const q = (req.query ?? {}) as Record<string, string | undefined>;
+    const cron = q['cron'] ?? '';
+    const count = Math.max(1, Math.min(10, Number(q['count']) || 3));
+    const next = cronPreview(cron, count);
+    return { valid: next.length > 0, next };
+  });
 
   app.post('/schedules', (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
@@ -724,6 +754,16 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       return { error: 'not found' };
     }
     return { ok: true };
+  });
+
+  app.post<{ Params: { id: string } }>('/schedules/:id/run', (req, reply) => {
+    const out = runScheduledNowFn(db, req.params.id);
+    if (!out) {
+      void reply.code(404);
+      return { error: 'not found' };
+    }
+    logger.info({ id: req.params.id, taskId: out.task_id }, 'scheduled task fired manually');
+    return out;
   });
 
   // ---------------- Phase 18g: Azure Boards ----------------
@@ -821,16 +861,62 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       void reply.code(400);
       return { error: 'id must be a positive integer' };
     }
-    const b = (req.body ?? {}) as { state?: unknown };
-    if (typeof b.state !== 'string' || !b.state.trim()) {
+    const b = (req.body ?? {}) as {
+      state?: unknown;
+      assigned_to?: unknown;
+      title?: unknown;
+      tags?: unknown;
+    };
+    const patch: {
+      state?: string;
+      assigned_to?: string | null;
+      title?: string;
+      tags?: string;
+    } = {};
+    if (typeof b.state === 'string') patch.state = b.state;
+    if (b.assigned_to === null || typeof b.assigned_to === 'string')
+      patch.assigned_to = b.assigned_to as string | null;
+    if (typeof b.title === 'string') patch.title = b.title;
+    if (typeof b.tags === 'string') patch.tags = b.tags;
+    if (Object.keys(patch).length === 0) {
       void reply.code(400);
-      return { error: 'body.state required' };
+      return {
+        error: 'body must include at least one of { state, assigned_to, title, tags }',
+      };
     }
     try {
-      await azureUpdateState(azureState.org_url, azureState.project, id, b.state, pat);
+      await azureUpdateWorkItem(azureState.org_url, azureState.project, id, patch, pat);
       const item = await azureGetWorkItem(azureState.org_url, azureState.project, id, pat);
-      logger.info({ id, state: b.state }, 'azure work item state updated');
+      logger.info({ id, patch }, 'azure work item patched');
       return item;
+    } catch (err) {
+      void reply.code(502);
+      return { error: err instanceof Error ? err.message : 'azure call failed' };
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/azure/work-items/:id/comments', async (req, reply) => {
+    const azureState = currentAzureState();
+    const pat = currentAzurePat();
+    if (!azureState.connected || !pat) {
+      void reply.code(409);
+      return { error: azureState.error ?? 'azure not connected' };
+    }
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      void reply.code(400);
+      return { error: 'id must be a positive integer' };
+    }
+    const b = (req.body ?? {}) as { text?: unknown };
+    if (typeof b.text !== 'string' || !b.text.trim()) {
+      void reply.code(400);
+      return { error: 'body.text required' };
+    }
+    try {
+      await azureAddComment(azureState.org_url, azureState.project, id, b.text, pat);
+      const comments = await azureListComments(azureState.org_url, azureState.project, id, pat);
+      logger.info({ id }, 'azure work item comment posted');
+      return { comments };
     } catch (err) {
       void reply.code(502);
       return { error: err instanceof Error ? err.message : 'azure call failed' };
@@ -901,7 +987,9 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       void reply.code(r.status);
       reply.header('content-type', r.contentType);
       reply.header('cache-control', 'private, max-age=300');
-      return reply.send(r.body);
+      // r1: r.body is a Uint8Array (in-process LRU caches the bytes). Fastify
+      // sends it as the response body verbatim.
+      return reply.send(Buffer.from(r.body));
     } catch (err) {
       void reply.code(502);
       return reply.send({

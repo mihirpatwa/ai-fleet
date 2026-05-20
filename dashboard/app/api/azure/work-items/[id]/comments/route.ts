@@ -11,3 +11,16 @@ export async function GET(
   const { id } = await params;
   return proxy(`/azure/work-items/${encodeURIComponent(id)}/comments`);
 }
+
+export async function POST(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
+): Promise<Response> {
+  const { id } = await params;
+  const body = await req.text();
+  return proxy(`/azure/work-items/${encodeURIComponent(id)}/comments`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body,
+  });
+}

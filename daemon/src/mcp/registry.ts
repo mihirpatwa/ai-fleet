@@ -181,6 +181,64 @@ export function upsertServer(next: McpServerConfig): McpServerConfig[] {
   return listMergedServers();
 }
 
+/** q9: export the stored rows for sharing across machines. */
+export function exportServers(): { servers: McpServerConfig[] } {
+  return { servers: loadServers() };
+}
+
+/** q9: import a payload from another machine.
+ *  - mode 'replace' wipes the existing stored rows first.
+ *  - mode 'merge' upserts each incoming row by name. */
+export function importServers(
+  payload: unknown,
+  mode: 'merge' | 'replace' = 'merge',
+): { servers: McpServerConfig[]; count: number } {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('payload must be { servers: McpServerConfig[] }');
+  }
+  const arr = (payload as { servers?: unknown }).servers;
+  if (!Array.isArray(arr)) {
+    throw new Error('payload.servers must be an array');
+  }
+  const incoming: McpServerConfig[] = arr
+    .map((raw) => {
+      if (!raw || typeof raw !== 'object') return null;
+      const r = raw as Partial<McpServerConfig>;
+      if (typeof r.name !== 'string' || !r.name) return null;
+      if (typeof r.command !== 'string' || !r.command) return null;
+      if (!Array.isArray(r.args)) return null;
+      return {
+        name: r.name,
+        command: r.command,
+        args: r.args.map(String),
+        enabled: r.enabled === true,
+        ...(typeof r.display_name === 'string' ? { display_name: r.display_name } : {}),
+        ...(r.env && typeof r.env === 'object'
+          ? {
+              env: Object.fromEntries(
+                Object.entries(r.env).map(([k, v]) => [k, String(v)]),
+              ),
+            }
+          : {}),
+        ...(r.preset === true ? { preset: true } : {}),
+        ...(Array.isArray(r.allowed_agents)
+          ? { allowed_agents: r.allowed_agents.map(String) }
+          : {}),
+      } as McpServerConfig;
+    })
+    .filter((x): x is McpServerConfig => x !== null);
+
+  if (mode === 'replace') {
+    saveServers(incoming);
+  } else {
+    const existing = loadServers();
+    const byName = new Map(existing.map((s) => [s.name, s]));
+    for (const s of incoming) byName.set(s.name, s);
+    saveServers(Array.from(byName.values()));
+  }
+  return { servers: listMergedServers(), count: incoming.length };
+}
+
 export function deleteServer(name: string): McpServerConfig[] {
   const all = loadServers().filter((s) => s.name !== name);
   saveServers(all);

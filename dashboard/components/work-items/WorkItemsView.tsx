@@ -19,8 +19,8 @@
 // show values that exist.
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useMemo, useState } from 'react';
 import useSWR from 'swr';
 import {
   Alert,
@@ -41,8 +41,15 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { ClearOutlined, FileOutlined, RocketOutlined, SettingOutlined } from '@ant-design/icons';
+import {
+  ClearOutlined,
+  FileOutlined,
+  RocketOutlined,
+  SettingOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import { jsonFetcher } from '@/lib/models';
+import { useActiveProject } from '@/lib/useActiveProject';
 import {
   decodeArtifactLabel,
   groupRelations,
@@ -60,22 +67,61 @@ const { Text, Paragraph, Title } = Typography;
 const TYPES = ['User Story', 'Feature', 'Task', 'Bug', 'Epic'];
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|bmp)(\?|$)/i;
 const VIDEO_EXT = /\.(mp4|webm|mov)(\?|$)/i;
+const PDF_EXT = /\.pdf(\?|$)/i;
 
 export function WorkItemsView() {
   const router = useRouter();
+  const pathname = usePathname();
+  const sp = useSearchParams();
   const { message } = App.useApp();
-  const [filters, setFilters] = useState<{
-    type?: string[];
-    state?: string[];
-    assigned_to?: string;
-    iteration_path?: string;
-    tag?: string;
-    search?: string;
-  }>({});
-  const [page, setPage] = useState(1); // 1-based for Antd
-  const [pageSize, setPageSize] = useState(25);
-  const [openId, setOpenId] = useState<number | null>(null);
+
+  // s5: every filter + page/size lives in the URL so a refresh / share keeps
+  // the view. `filters` is a getter over sp; setters write back through
+  // pushQuery so the browser back-button works too.
+  const filters = useMemo(() => readFiltersFromSp(sp), [sp]);
+  const page = Math.max(1, Number(sp.get('page')) || 1);
+  const pageSize = clampPageSize(Number(sp.get('pageSize')) || 25);
+  const openId = sp.get('open') ? Number(sp.get('open')) : null;
+
+  const setSp = useCallback(
+    (mut: (next: URLSearchParams) => void): void => {
+      const next = new URLSearchParams(sp.toString());
+      mut(next);
+      const qs = next.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname);
+    },
+    [router, pathname, sp],
+  );
+
+  const setFilters = (
+    updater: (prev: typeof filters) => typeof filters,
+  ): void => {
+    const nextFilters = updater(filters);
+    setSp((q) => {
+      // Reset to page 1 on any filter change.
+      q.delete('page');
+      writeFiltersToSp(q, nextFilters);
+    });
+  };
+  const setPage = (p: number): void =>
+    setSp((q) => {
+      if (p <= 1) q.delete('page');
+      else q.set('page', String(p));
+    });
+  const setPageSize = (n: number): void =>
+    setSp((q) => {
+      if (n === 25) q.delete('pageSize');
+      else q.set('pageSize', String(n));
+    });
+  const setOpenId = (id: number | null): void =>
+    setSp((q) => {
+      if (id == null) q.delete('open');
+      else q.set('open', String(id));
+    });
+
   const [connectOpen, setConnectOpen] = useState(false);
+  const [runBusy, setRunBusy] = useState(false);
+  const { current: activeProject } = useActiveProject();
 
   const { data: conn, mutate: mutateConn } = useSWR<AzureConnectionState>(
     '/api/azure/connection',
@@ -126,7 +172,7 @@ export function WorkItemsView() {
     jsonFetcher,
     { revalidateOnFocus: false },
   );
-  const { data: commentsData } = useSWR<{ comments: WorkItemComment[] }>(
+  const { data: commentsData, mutate: mutateComments } = useSWR<{ comments: WorkItemComment[] }>(
     openId && conn?.connected ? `/api/azure/work-items/${openId}/comments` : null,
     jsonFetcher,
     { revalidateOnFocus: false },
@@ -134,22 +180,58 @@ export function WorkItemsView() {
 
   // q7: PATCH the work item's System.State and refresh both the drawer detail
   // and the list (so the table shows the new state immediately).
-  async function changeState(id: number, nextState: string): Promise<void> {
+  async function patchItem(
+    id: number,
+    body: {
+      state?: string;
+      assigned_to?: string | null;
+      title?: string;
+      tags?: string;
+    },
+    note: string,
+  ): Promise<void> {
     try {
       const res = await fetch(`/api/azure/work-items/${id}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ state: nextState }),
+        body: JSON.stringify(body),
       });
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(body.error ?? `daemon returned ${res.status}`);
-      message.success(`#${id} → ${nextState}`);
-      // Re-fetch list (state changed) and re-set detail to the daemon's reply.
+      const respBody = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(respBody.error ?? `daemon returned ${res.status}`);
+      message.success(`#${id} ${note}`);
       await mutateDetail();
-      // Cheap force-revalidate the list query — null-safe.
       if (listKey) void fetch(listKey).catch(() => undefined);
     } catch (err) {
-      message.error(err instanceof Error ? err.message : 'state update failed');
+      message.error(err instanceof Error ? err.message : 'patch failed');
+    }
+  }
+
+  function changeState(id: number, nextState: string): Promise<void> {
+    return patchItem(id, { state: nextState }, `→ ${nextState}`);
+  }
+  function changeAssignee(id: number, next: string | null): Promise<void> {
+    return patchItem(id, { assigned_to: next }, next ? `assigned to ${next}` : 'unassigned');
+  }
+
+  // q8/s8: post a new Discussion comment. Returns the refreshed comments
+  // array so the drawer rerenders without a full detail refetch.
+  async function postComment(id: number, text: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/azure/work-items/${id}/comments`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        comments?: WorkItemComment[];
+        error?: string;
+      };
+      if (!res.ok) throw new Error(body.error ?? `daemon returned ${res.status}`);
+      message.success('Comment posted');
+      return true;
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'comment failed');
+      return false;
     }
   }
 
@@ -163,6 +245,37 @@ export function WorkItemsView() {
     }
     message.success(`Prefilled goal from ${item.type} #${item.id}. Opening submit modal…`);
     router.push('/?openGoalModal=1');
+  }
+
+  /** s9: skip the modal and submit directly with the current active project +
+   *  orchestrator agent. Useful for quick "ship this ticket now" flows. */
+  async function runNow(item: WorkItemDetail): Promise<void> {
+    if (!activeProject) {
+      message.warning('Pick an active project in the header first.');
+      return;
+    }
+    const prompt = workItemToGoal(item);
+    setRunBusy(true);
+    try {
+      const res = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          goal: prompt,
+          project_root: activeProject,
+          agent: 'orchestrator',
+          effort: 'medium',
+        }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
+      if (!res.ok) throw new Error(body.error ?? `daemon returned ${res.status}`);
+      message.success(`Spawned ${item.type} #${item.id}`);
+      if (body.id) router.push(`/task/${body.id}`);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'submit failed');
+    } finally {
+      setRunBusy(false);
+    }
   }
 
   if (!conn) return <Paragraph type="secondary">Loading…</Paragraph>;
@@ -289,7 +402,7 @@ export function WorkItemsView() {
             setFilters((f) => ({ ...f, search: search.trim() || undefined }))
           }
         />
-        <Button icon={<ClearOutlined />} onClick={() => setFilters({})}>
+        <Button icon={<ClearOutlined />} onClick={() => setFilters(() => ({}))}>
           Clear
         </Button>
         <Button size="small" onClick={() => setConnectOpen(true)}>
@@ -327,8 +440,8 @@ export function WorkItemsView() {
           pageSizeOptions: [25, 50, 100, 200],
           showTotal: (n, range) => `${range[0]}–${range[1]} of ${n}`,
           onChange: (p, s) => {
-            setPage(p);
-            setPageSize(s);
+            if (s !== pageSize) setPageSize(s);
+            if (p !== page) setPage(p);
           },
         }}
         // q3: horizontal scroll keeps the table usable at 375px wide.
@@ -363,6 +476,22 @@ export function WorkItemsView() {
               <Link href={azureWebUrl(conn, detail.id)} target="_blank">
                 <Button>Open in Azure</Button>
               </Link>
+              <Tooltip
+                title={
+                  activeProject
+                    ? `Spawn an orchestrator now against ${activeProject}`
+                    : 'Pick an active project in the header first.'
+                }
+              >
+                <Button
+                  icon={<ThunderboltOutlined />}
+                  loading={runBusy}
+                  disabled={!activeProject}
+                  onClick={() => void runNow(detail)}
+                >
+                  Run now
+                </Button>
+              </Tooltip>
               <Button
                 type="primary"
                 icon={<RocketOutlined />}
@@ -380,7 +509,14 @@ export function WorkItemsView() {
             comments={commentsData?.comments ?? []}
             orgUrl={conn.org_url}
             states={statesData?.states ?? []}
+            assigneeOptions={assigneeOptions.map((o) => o.value)}
             onChangeState={(next) => changeState(detail.id, next)}
+            onChangeAssignee={(next) => changeAssignee(detail.id, next)}
+            onPostComment={async (text) => {
+              const ok = await postComment(detail.id, text);
+              if (ok) await mutateComments();
+              return ok;
+            }}
           />
         )}
       </Drawer>
@@ -405,18 +541,30 @@ function WorkItemBody({
   comments,
   orgUrl,
   states,
+  assigneeOptions,
   onChangeState,
+  onChangeAssignee,
+  onPostComment,
 }: {
   item: WorkItemDetail;
   comments: WorkItemComment[];
   orgUrl: string;
   states: string[];
+  assigneeOptions: string[];
   onChangeState: (next: string) => void | Promise<void>;
+  onChangeAssignee: (next: string | null) => void | Promise<void>;
+  onPostComment: (text: string) => Promise<boolean>;
 }) {
   const grouped = groupRelations(item.relations);
   return (
     <Space direction="vertical" size={20} style={{ width: '100%' }}>
-      <MetaStrip item={item} states={states} onChangeState={onChangeState} />
+      <MetaStrip
+        item={item}
+        states={states}
+        assigneeOptions={assigneeOptions}
+        onChangeState={onChangeState}
+        onChangeAssignee={onChangeAssignee}
+      />
 
       {item.description_html && (
         <Section title="Description">
@@ -440,15 +588,14 @@ function WorkItemBody({
       )}
 
       <Section title={`Discussion (${comments.length})`}>
-        {comments.length === 0 ? (
-          <Text type="secondary">No comments yet.</Text>
-        ) : (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            {comments.map((c) => (
-              <CommentCard key={c.id} comment={c} orgUrl={orgUrl} />
-            ))}
-          </Space>
-        )}
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          {comments.length === 0 ? (
+            <Text type="secondary">No comments yet.</Text>
+          ) : (
+            comments.map((c) => <CommentCard key={c.id} comment={c} orgUrl={orgUrl} />)
+          )}
+          <ComposeComment onPost={onPostComment} />
+        </Space>
       </Section>
 
       <Section title={`Attachments (${item.attachments.length})`}>
@@ -487,11 +634,15 @@ interface MetaRow {
 function MetaStrip({
   item,
   states,
+  assigneeOptions,
   onChangeState,
+  onChangeAssignee,
 }: {
   item: WorkItemDetail;
   states: string[];
+  assigneeOptions: string[];
   onChangeState: (next: string) => void | Promise<void>;
+  onChangeAssignee: (next: string | null) => void | Promise<void>;
 }) {
   // q7: state is editable. The Select shows the union of states the workflow
   // exposes; switching dispatches a PATCH. Read-only fallback to a Tag when
@@ -510,9 +661,27 @@ function MetaStrip({
           .map((s) => ({ value: s, label: s }))}
       />
     );
+  // s8: assigned_to is editable. Free-text Select w/ derived options from the
+  // current page; clearing the value calls Azure's "remove" op.
+  const assignedValue = (
+    <Select<string[]>
+      size="small"
+      style={{ minWidth: 220 }}
+      value={item.assigned_to ? [item.assigned_to] : []}
+      placeholder="Unassigned"
+      allowClear
+      showSearch
+      mode="tags"
+      maxCount={1}
+      onChange={(values) =>
+        void onChangeAssignee(values && values.length > 0 ? (values[0] ?? null) : null)
+      }
+      options={assigneeOptions.map((a) => ({ value: a, label: a }))}
+    />
+  );
   const rows: (MetaRow | null)[] = [
     { label: 'State', value: stateValue },
-    item.assigned_to ? { label: 'Assigned', value: <Tag color="blue">{item.assigned_to}</Tag> } : null,
+    { label: 'Assigned', value: assignedValue },
     item.created_by
       ? {
           label: 'Created',
@@ -592,6 +761,58 @@ function SanitizedHtml({ html, orgUrl }: { html: string; orgUrl: string }) {
   );
 }
 
+function ComposeComment({
+  onPost,
+}: {
+  onPost: (text: string) => Promise<boolean>;
+}) {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <div
+      style={{
+        padding: 10,
+        borderRadius: 6,
+        border: '1px dashed rgba(128,128,128,0.32)',
+      }}
+    >
+      <Input.TextArea
+        autoSize={{ minRows: 2, maxRows: 6 }}
+        placeholder="Add a comment…  (Cmd/Ctrl+Enter to post)"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && text.trim()) {
+            e.preventDefault();
+            void submit();
+          }
+        }}
+      />
+      <Space style={{ marginTop: 6 }}>
+        <Button
+          type="primary"
+          size="small"
+          loading={busy}
+          disabled={!text.trim()}
+          onClick={() => void submit()}
+        >
+          Post
+        </Button>
+        <Text type="secondary" style={{ fontSize: 11 }}>
+          Cmd/Ctrl+Enter posts. Comments appear immediately after Azure responds.
+        </Text>
+      </Space>
+    </div>
+  );
+  async function submit(): Promise<void> {
+    if (!text.trim()) return;
+    setBusy(true);
+    const ok = await onPost(text.trim());
+    if (ok) setText('');
+    setBusy(false);
+  }
+}
+
 function CommentCard({ comment, orgUrl }: { comment: WorkItemComment; orgUrl: string }) {
   return (
     <div
@@ -619,6 +840,7 @@ function CommentCard({ comment, orgUrl }: { comment: WorkItemComment; orgUrl: st
 function AttachmentCard({ attachment }: { attachment: { name: string; url: string; size?: number } }) {
   const isImage = IMAGE_EXT.test(attachment.name) || IMAGE_EXT.test(attachment.url);
   const isVideo = VIDEO_EXT.test(attachment.name) || VIDEO_EXT.test(attachment.url);
+  const isPdf = PDF_EXT.test(attachment.name) || PDF_EXT.test(attachment.url);
   const proxied = `/api/azure/attachment?url=${encodeURIComponent(attachment.url)}`;
   return (
     <div
@@ -640,6 +862,14 @@ function AttachmentCard({ attachment }: { attachment: { name: string; url: strin
           controls
           src={proxied}
           style={{ width: '100%', borderRadius: 4, maxHeight: 180 }}
+        />
+      ) : isPdf ? (
+        // r3: PDF preview via iframe. The daemon proxy adds the PAT, so the
+        // browser's native PDF viewer renders without prompting.
+        <iframe
+          title={attachment.name}
+          src={proxied}
+          style={{ width: '100%', height: 220, border: 0, borderRadius: 4 }}
         />
       ) : (
         <div
@@ -812,6 +1042,57 @@ function ConnectModal({
 }
 
 /* ----------------------------- helpers ---------------------------- */
+
+interface UrlFilters {
+  type?: string[];
+  state?: string[];
+  assigned_to?: string;
+  iteration_path?: string;
+  tag?: string;
+  search?: string;
+}
+
+/** s5: read filter state from the URL searchParams. Multi-value filters are
+ *  comma-separated; trim/empty values are dropped. */
+function readFiltersFromSp(sp: URLSearchParams): UrlFilters {
+  const get = (k: string): string | undefined => sp.get(k) ?? undefined;
+  const csv = (k: string): string[] | undefined => {
+    const v = sp.get(k);
+    if (!v) return undefined;
+    const arr = v.split(',').map((s) => s.trim()).filter(Boolean);
+    return arr.length > 0 ? arr : undefined;
+  };
+  return {
+    ...(csv('type') ? { type: csv('type')! } : {}),
+    ...(csv('state') ? { state: csv('state')! } : {}),
+    ...(get('assigned_to') ? { assigned_to: get('assigned_to')! } : {}),
+    ...(get('iteration_path') ? { iteration_path: get('iteration_path')! } : {}),
+    ...(get('tag') ? { tag: get('tag')! } : {}),
+    ...(get('search') ? { search: get('search')! } : {}),
+  };
+}
+
+function writeFiltersToSp(sp: URLSearchParams, f: UrlFilters): void {
+  const setOrDel = (k: string, v?: string | string[]): void => {
+    if (Array.isArray(v)) {
+      if (v.length === 0) sp.delete(k);
+      else sp.set(k, v.join(','));
+    } else if (!v) sp.delete(k);
+    else sp.set(k, v);
+  };
+  setOrDel('type', f.type);
+  setOrDel('state', f.state);
+  setOrDel('assigned_to', f.assigned_to);
+  setOrDel('iteration_path', f.iteration_path);
+  setOrDel('tag', f.tag);
+  setOrDel('search', f.search);
+}
+
+function clampPageSize(n: number): number {
+  if (!Number.isFinite(n) || n <= 0) return 25;
+  if (n > 200) return 200;
+  return n;
+}
 
 function buildQuery(
   f: {

@@ -3,9 +3,11 @@
 // dashboard lets the user create/edit/disable/delete rows. Cron expressions
 // are 5-field (min hour dom mon dow). Validation lives daemon-side — a bad
 // cron returns 400 from POST/PATCH.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
 import {
+  Alert,
   App,
   Button,
   Form,
@@ -17,10 +19,16 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import {
+  DeleteOutlined,
+  EditOutlined,
+  PlusOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import { AGENTS } from '@/lib/agents';
 import { jsonFetcher } from '@/lib/models';
 import { roleColor } from '@/lib/theme';
@@ -46,6 +54,7 @@ function tint(hex: string): React.CSSProperties {
 
 export function SchedulesView() {
   const { message } = App.useApp();
+  const router = useRouter();
   const { data, mutate, isLoading } = useSWR<{ schedules: ScheduledRow[] }>(
     '/api/schedules',
     jsonFetcher,
@@ -53,6 +62,21 @@ export function SchedulesView() {
   );
   const [editing, setEditing] = useState<ScheduledRow | null>(null);
   const [creating, setCreating] = useState(false);
+
+  async function runNow(id: string, name: string): Promise<void> {
+    try {
+      const res = await fetch(`/api/schedules/${encodeURIComponent(id)}/run`, {
+        method: 'POST',
+      });
+      const body = (await res.json().catch(() => ({}))) as { task_id?: string; error?: string };
+      if (!res.ok) throw new Error(body.error ?? `daemon returned ${res.status}`);
+      message.success(`Fired ${name}`);
+      if (body.task_id) router.push(`/task/${body.task_id}`);
+      else await mutate();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'run failed');
+    }
+  }
 
   async function patch(id: string, body: Partial<ScheduledRow>): Promise<void> {
     try {
@@ -128,6 +152,13 @@ export function SchedulesView() {
       key: 'actions',
       render: (_, r) => (
         <Space>
+          <Tooltip title="Fire now (doesn't change the cron)">
+            <Button
+              icon={<ThunderboltOutlined />}
+              size="small"
+              onClick={() => void runNow(r.id, r.name)}
+            />
+          </Tooltip>
           <Button icon={<EditOutlined />} size="small" onClick={() => setEditing(r)}>
             Edit
           </Button>
@@ -203,6 +234,12 @@ function EditModal({
   const [project, setProject] = useState(value?.project_root ?? '');
   const [enabled, setEnabled] = useState(value?.enabled ?? true);
   const [busy, setBusy] = useState(false);
+  // s3: cron validator + next-fire preview. Debounced fetch against the
+  // daemon — bad expressions return valid:false + empty list.
+  const [preview, setPreview] = useState<{ valid: boolean; next: string[] }>({
+    valid: true,
+    next: [],
+  });
 
   // Reset whenever the modal opens for a new row.
   if (open && value && name !== value.name) {
@@ -220,6 +257,25 @@ function EditModal({
     setProject('');
     setEnabled(true);
   }
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handle = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/schedules/preview?cron=${encodeURIComponent(cron)}&count=3`,
+        );
+        const body = (await res.json().catch(() => ({}))) as {
+          valid?: boolean;
+          next?: string[];
+        };
+        setPreview({ valid: !!body.valid, next: body.next ?? [] });
+      } catch {
+        setPreview({ valid: false, next: [] });
+      }
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [cron, open]);
 
   async function submit(): Promise<void> {
     setBusy(true);
@@ -266,7 +322,35 @@ function EditModal({
         </Form.Item>
         <Form.Item
           label="Cron (UTC, 5-field)"
-          help='min hour dom mon dow — e.g. "0 6 * * *" runs daily at 06:00 UTC. "*/15 * * * *" every 15 min.'
+          validateStatus={preview.valid ? undefined : 'error'}
+          help={
+            preview.valid ? (
+              <>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  min hour dom mon dow — e.g. <Text code>0 6 * * *</Text> daily 06:00 UTC.
+                </Text>
+                {preview.next.length > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      Next runs:{' '}
+                    </Text>
+                    {preview.next.map((ts) => (
+                      <Tag key={ts} color="default" style={{ marginInlineEnd: 4 }}>
+                        {ts}
+                      </Tag>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <Alert
+                type="error"
+                showIcon
+                style={{ marginTop: 4 }}
+                message="Invalid cron expression"
+              />
+            )
+          }
         >
           <Input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 0 * * *" />
         </Form.Item>

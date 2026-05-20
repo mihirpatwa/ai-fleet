@@ -158,6 +158,47 @@ const checks: Check[] = [
         ? { ok: true, detail: `${paths.aifleetHome}/audit.log` }
         : { ok: false, detail: `cannot write the audit log under ${paths.aifleetHome}` },
   },
+
+  // q5: extra checks for phase-18 surface — MCP servers (npx), Codex CLI
+  // when it lands, and OS-sandbox tooling needed before flipping Codex on.
+  {
+    name: 'npx (for MCP presets)',
+    section: 'extensions',
+    run: async () => {
+      const res = await execa('npx', ['--version'], { reject: false });
+      return res.exitCode === 0
+        ? { ok: true, detail: `npx ${res.stdout.trim()}` }
+        : { ok: false, detail: 'npx not on PATH — MCP presets that shell to npx will fail' };
+    },
+  },
+  {
+    name: 'codex CLI',
+    section: 'extensions',
+    run: async () => {
+      const res = await execa('codex', ['--version'], { reject: false });
+      if (res.exitCode === 0) return { ok: true, detail: res.stdout.trim() };
+      return { ok: true, detail: 'optional — install only when 18c lands' };
+    },
+  },
+  {
+    name: 'OS sandbox wrapper',
+    section: 'extensions',
+    run: async () => {
+      if (process.platform === 'darwin') {
+        const r = await execa('sandbox-exec', ['-?'], { reject: false });
+        return r.exitCode === 0 || r.exitCode === 1
+          ? { ok: true, detail: 'sandbox-exec present (macOS)' }
+          : { ok: false, detail: 'sandbox-exec missing (macOS)' };
+      }
+      if (process.platform === 'linux') {
+        const r = await execa('firejail', ['--version'], { reject: false });
+        return r.exitCode === 0
+          ? { ok: true, detail: r.stdout.split('\n')[0] ?? '' }
+          : { ok: true, detail: 'firejail missing (needed only when Codex ships)' };
+      }
+      return { ok: true, detail: `no native sandbox for ${process.platform}` };
+    },
+  },
 ];
 
 export async function doctor(): Promise<void> {

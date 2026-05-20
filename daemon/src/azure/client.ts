@@ -318,16 +318,40 @@ interface PatchOp {
   value?: unknown;
 }
 
-/** PATCH a work item's state via the JSON Patch endpoint. */
-export async function updateWorkItemState(
+/** PATCH a work item with one or more field updates via the JSON Patch endpoint. */
+export interface WorkItemPatch {
+  state?: string;
+  assigned_to?: string | null;
+  title?: string;
+  tags?: string;
+}
+
+export async function updateWorkItem(
   orgUrl: string,
   project: string,
   id: number,
-  newState: string,
+  patch: WorkItemPatch,
   pat: string,
 ): Promise<void> {
+  const ops: PatchOp[] = [];
+  if (patch.state !== undefined) {
+    ops.push({ op: 'add', path: '/fields/System.State', value: patch.state });
+  }
+  if (patch.assigned_to !== undefined) {
+    ops.push({
+      op: patch.assigned_to ? 'add' : 'remove',
+      path: '/fields/System.AssignedTo',
+      ...(patch.assigned_to ? { value: patch.assigned_to } : {}),
+    });
+  }
+  if (patch.title !== undefined) {
+    ops.push({ op: 'add', path: '/fields/System.Title', value: patch.title });
+  }
+  if (patch.tags !== undefined) {
+    ops.push({ op: 'add', path: '/fields/System.Tags', value: patch.tags });
+  }
+  if (ops.length === 0) return;
   const url = `${joinOrgProject(orgUrl, project)}/_apis/wit/workitems/${id}?api-version=${API_VERSION}`;
-  const ops: PatchOp[] = [{ op: 'add', path: '/fields/System.State', value: newState }];
   const res = await fetch(url, {
     method: 'PATCH',
     headers: {
@@ -344,23 +368,107 @@ export async function updateWorkItemState(
   }
 }
 
+// Back-compat wrapper kept for the existing server route caller. New code
+// should use updateWorkItem directly.
+export async function updateWorkItemState(
+  orgUrl: string,
+  project: string,
+  id: number,
+  newState: string,
+  pat: string,
+): Promise<void> {
+  return updateWorkItem(orgUrl, project, id, { state: newState }, pat);
+}
+
+/** POST a comment on a work item. */
+export async function addComment(
+  orgUrl: string,
+  project: string,
+  id: number,
+  text: string,
+  pat: string,
+): Promise<void> {
+  const url = `${joinOrgProject(orgUrl, project)}/_apis/wit/workItems/${id}/comments?api-version=7.1-preview.3`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: authHeader(pat),
+      Accept: 'application/json',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ text }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`Azure ${res.status}: ${t.slice(0, 240)}`);
+  }
+}
+
 /* ---------------------------- attachment proxy ---------------------------- */
 
+/**
+ * r1: small in-process LRU for attachment bytes. Heavy drawers open the same
+ * inline images repeatedly; cache hits skip the round-trip and keep the
+ * Azure PAT off the hot path. Bound by total bytes + entry count.
+ */
+interface CacheEntry {
+  buffer: Uint8Array;
+  contentType: string;
+}
+const ATTACHMENT_CACHE = new Map<string, CacheEntry>();
+const ATTACHMENT_CACHE_MAX_ENTRIES = 200;
+const ATTACHMENT_CACHE_MAX_BYTES = 50 * 1024 * 1024;
+let attachmentCacheBytes = 0;
+
+function touch(key: string): void {
+  const v = ATTACHMENT_CACHE.get(key);
+  if (!v) return;
+  ATTACHMENT_CACHE.delete(key);
+  ATTACHMENT_CACHE.set(key, v);
+}
+
+function evictIfNeeded(): void {
+  while (
+    ATTACHMENT_CACHE.size > ATTACHMENT_CACHE_MAX_ENTRIES ||
+    attachmentCacheBytes > ATTACHMENT_CACHE_MAX_BYTES
+  ) {
+    const oldest = ATTACHMENT_CACHE.keys().next().value as string | undefined;
+    if (!oldest) break;
+    const entry = ATTACHMENT_CACHE.get(oldest);
+    ATTACHMENT_CACHE.delete(oldest);
+    if (entry) attachmentCacheBytes -= entry.buffer.length;
+  }
+}
+
 /** Stream an attachment through the daemon so the browser can render it
- *  without leaking the PAT into <img src=...>. */
+ *  without leaking the PAT into <img src=...>. Cached bytes are served as a
+ *  fresh Uint8Array on each hit so the caller can stream/own it. */
 export async function fetchAttachment(
   url: string,
   pat: string,
-): Promise<{ body: ReadableStream<Uint8Array>; contentType: string; status: number }> {
+): Promise<{ body: Uint8Array; contentType: string; status: number }> {
+  const cached = ATTACHMENT_CACHE.get(url);
+  if (cached) {
+    touch(url);
+    return { body: cached.buffer, contentType: cached.contentType, status: 200 };
+  }
   const res = await fetch(url, {
     headers: { Authorization: authHeader(pat), Accept: '*/*' },
     signal: AbortSignal.timeout(30_000),
   });
-  return {
-    body: res.body!,
-    contentType: res.headers.get('content-type') ?? 'application/octet-stream',
-    status: res.status,
-  };
+  const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
+  if (!res.ok) {
+    return { body: new Uint8Array(), contentType, status: res.status };
+  }
+  const buffer = new Uint8Array(await res.arrayBuffer());
+  // Cap individual entries to keep one giant PDF from flushing the cache.
+  if (buffer.length <= 8 * 1024 * 1024) {
+    ATTACHMENT_CACHE.set(url, { buffer, contentType });
+    attachmentCacheBytes += buffer.length;
+    evictIfNeeded();
+  }
+  return { body: buffer, contentType, status: res.status };
 }
 
 /* ---------------------------- states (per type) ---------------------------- */

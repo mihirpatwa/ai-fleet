@@ -3,8 +3,11 @@
 // Each provider exposes a cheap "is this key good?" probe so the connect
 // modal can verify before the user is dropped into the dashboard. For Claude
 // we hit /v1/models — a lightweight call that 401s immediately on a bad key.
-// `local` auth (Claude Code logged-in subscription) can't be validated from
-// here; we assume it works and rely on the first spawn to surface errors.
+// `local` auth probes filesystem signals Claude Code drops on login (r8) so
+// the user gets an explicit error before the first spawn fails.
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { AuthMethod, ProviderName } from './types.js';
 
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -14,10 +17,33 @@ export interface ValidateResult {
   error?: string;
 }
 
+/** r8: probe for files Claude Code drops after `claude /login` so the connect
+ *  modal can refuse "local" auth when the user isn't actually logged in. We
+ *  accept any of three known locations the CLI has used. */
+function hasClaudeCodeLogin(): boolean {
+  const candidates = [
+    join(homedir(), '.claude', '.credentials.json'),
+    join(homedir(), '.claude.json'),
+    join(homedir(), '.config', 'claude', '.credentials.json'),
+  ];
+  return candidates.some((p) => {
+    try {
+      return existsSync(p);
+    } catch {
+      return false;
+    }
+  });
+}
+
 async function validateClaude(auth: AuthMethod, key?: string): Promise<ValidateResult> {
   if (auth === 'local') {
-    // We can't reach Claude Code's local credentials from the daemon process
-    // without spawning the CLI. Defer to the first spawn — return ok.
+    if (!hasClaudeCodeLogin()) {
+      return {
+        ok: false,
+        error:
+          'Claude Code credentials not found — run `claude /login` in a terminal first.',
+      };
+    }
     return { ok: true };
   }
   if (!key) return { ok: false, error: 'api_key required' };

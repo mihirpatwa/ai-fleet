@@ -27,6 +27,29 @@ function Elapsed({ task }: { task: Task }) {
   return <Text type="secondary">{running ? live : elapsed(task.startedAt, task.finishedAt)}</Text>;
 }
 
+/** s1: pull model + source + effort from the 'started' event payload. The
+ *  source explains how the model was chosen (adaptive heuristic vs explicit
+ *  override vs default vs orchestrator slot) so the user can debug surprises. */
+function ModelChip({ events }: { events: FleetEvent[] }) {
+  const started = events.find((e) => e.type === 'started');
+  if (!started || !started.payloadJson || typeof started.payloadJson !== 'object') return null;
+  const p = started.payloadJson as {
+    model?: string;
+    model_source?: string;
+    effort?: string;
+  };
+  if (!p.model) return null;
+  return (
+    <>
+      <Tag color="blue">{p.model}</Tag>
+      {p.model_source && p.model_source !== 'default' && (
+        <Tag color={p.model_source === 'adaptive' ? 'geekblue' : 'default'}>{p.model_source}</Tag>
+      )}
+      {p.effort && <Tag color="purple">{p.effort} effort</Tag>}
+    </>
+  );
+}
+
 /** Shown when a task is blocked because its model was deprecated (phase 13
  *  step 8). One click requeues it with the current global default. */
 function ModelDeprecatedBanner({ task }: { task: Task }) {
@@ -106,6 +129,7 @@ export function TaskDetail({
           {task.projectRoot}
         </Text>
         <Elapsed task={task} />
+        <ModelChip events={events} />
       </Space>
 
       {modelDeprecated ? (

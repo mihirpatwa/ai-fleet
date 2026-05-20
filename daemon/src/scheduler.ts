@@ -78,6 +78,24 @@ export function nextRun(expr: string, from: Date = new Date()): string | null {
   return null;
 }
 
+/** s3: list the next N runs (UTC) after `from`. Returns [] for invalid crons. */
+export function previewRuns(expr: string, count = 3, from: Date = new Date()): string[] {
+  try {
+    parseCron(expr);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  let cursor = from;
+  for (let i = 0; i < count; i++) {
+    const ts = nextRun(expr, cursor);
+    if (!ts) break;
+    out.push(ts);
+    cursor = new Date(ts.replace(' ', 'T') + 'Z');
+  }
+  return out;
+}
+
 interface SeedDef {
   name: string;
   cron: string;
@@ -219,6 +237,25 @@ export function updateScheduled(
 export function deleteScheduled(db: FleetDb, id: string): boolean {
   const r = db.raw.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
   return r.changes > 0;
+}
+
+/** s2: materialize a task from a scheduled row right now, without touching
+ *  the cron. last_run_at is bumped so the row's history reflects the
+ *  manual fire. Returns the new task id. */
+export function runScheduledNow(
+  db: FleetDb,
+  id: string,
+): { task_id: string } | null {
+  const row = oneOrNull(db, id);
+  if (!row) return null;
+  const task = db.createTask({
+    projectRoot: row.project_root || aifleetDir(),
+    title: `scheduled (manual): ${row.name}`,
+    assignedAgent: row.agent,
+    inputJson: row.input_json,
+  });
+  db.raw.prepare('UPDATE scheduled_tasks SET last_run_at = ? WHERE id = ?').run(nowTs(), id);
+  return { task_id: task.id };
 }
 
 function one(db: FleetDb, id: string): ScheduledRow {
