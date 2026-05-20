@@ -20,8 +20,6 @@ import type { FleetBus, SessionTaskMap } from './bus.js';
 import type { FleetConfig } from './config.js';
 import type { FleetDb, Json, Task } from './db.js';
 import { recordAndBroadcast } from './events.js';
-import { computeCost } from './pricing.js';
-import { checkCostCaps } from './costguard.js';
 import { createMemoryMcp } from './mcp/memory.js';
 import { completedRetrospectorRuns, regenerateHotTier } from './memory.js';
 import {
@@ -229,21 +227,6 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
     }
   }
 
-  /** Terminal failure with NO retry (cost caps, hard policy). */
-  function failNoRetry(task: Task, error: string, reason?: string): void {
-    db.updateTask(task.id, { status: 'failed', error });
-    emit(task, 'failed', { error, noRetry: true, ...(reason ? { reason } : {}) });
-    logger.error({ taskId: task.id, error, reason }, 'task failed (no retry)');
-    if (error === 'cost_cap_exceeded') {
-      void alerts.notify('cost_cap_exceeded', {
-        taskId: task.id,
-        projectRoot: task.projectRoot,
-        summary: reason ?? error,
-      });
-    }
-    queueRetrospector(task);
-  }
-
   /**
    * When a ROOT task reaches a terminal state, queue a one-shot retrospector
    * child (the orchestrator is also prompted to, but the daemon guarantees it
@@ -333,31 +316,6 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
       allowNetwork: task.assignedAgent === 'researcher' || inputObj['allow_network'] === true,
     };
 
-    // Cost circuit breaker: checked up front, before every tool (canUseTool),
-    // and on each result. Tripping fails the task with NO retry.
-    const cap = { tripped: false, reason: '', warned: false };
-    const capExceeded = (): boolean => {
-      if (cap.tripped) return true;
-      const c = checkCostCaps(db, config, task.id, task.assignedAgent);
-      if (c.exceeded) {
-        cap.tripped = true;
-        cap.reason = c.reason ?? 'cost cap exceeded';
-      } else if (c.warn && !cap.warned) {
-        cap.warned = true;
-        const capSummary = `~80% of a cost cap (task $${c.taskUsd.toFixed(4)}, agent/hr $${c.agentHourUsd.toFixed(4)})`;
-        void alerts.notify('cost_cap_warning_80', {
-          taskId: task.id,
-          projectRoot: task.projectRoot,
-          summary: capSummary,
-        });
-      }
-      return cap.tripped;
-    };
-    if (capExceeded()) {
-      failNoRetry(task, 'cost_cap_exceeded', cap.reason);
-      return;
-    }
-
     db.updateTask(task.id, { status: 'running' }); // auto-stamps started_at
     const started = db.getTask(task.id);
     const startedAt = started?.startedAt ?? nowTs();
@@ -388,17 +346,6 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
       toolName: string,
       input: Record<string, unknown>,
     ): Promise<PermissionResult> => {
-      if (capExceeded()) {
-        audit.record({
-          task_id: task.id,
-          agent: task.assignedAgent,
-          tool: toolName,
-          target: '-',
-          allowed: false,
-          denied_reason: 'cost_cap_exceeded',
-        });
-        return { behavior: 'deny', message: 'cost_cap_exceeded', interrupt: true };
-      }
       const d = decideTool(ctx, toolName, input);
       audit.record({
         task_id: task.id,
@@ -447,7 +394,6 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
     live.set(task.id, q);
     try {
       for await (const msg of q) {
-        if (cap.tripped) break;
         if (msg.type === 'system' && msg.subtype === 'init') {
           sessionMap.set(msg.session_id, task.id);
         } else if (msg.type === 'assistant') {
@@ -466,8 +412,9 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
             outputTokens: Number(u?.output_tokens ?? 0),
             cacheReadTokens: Number(u?.cache_read_input_tokens ?? 0),
           };
-          let cost = computeCost(model, usage);
-          if (cost === 0 && typeof msg.total_cost_usd === 'number') cost = msg.total_cost_usd;
+          // Token usage is kept for non-cost analytics (debugging long contexts,
+          // model selection feedback). costUsd is recorded as 0 — phase 17
+          // dropped the cost surface end-to-end.
           db.recordAgentRun({
             taskId: task.id,
             agent: task.assignedAgent,
@@ -475,7 +422,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,
             cacheReadTokens: usage.cacheReadTokens,
-            costUsd: cost,
+            costUsd: 0,
             status: msg.subtype,
             startedAt,
             finishedAt: nowTs(),
@@ -486,7 +433,6 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
             const detail = msg.errors.join('; ') || msg.subtype;
             throw new Error(`agent run ${msg.subtype}: ${detail}`);
           }
-          if (capExceeded()) break;
         }
       }
     } catch (err) {
@@ -523,16 +469,6 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
       return;
     }
     live.delete(task.id);
-
-    if (cap.tripped) {
-      try {
-        await q.interrupt();
-      } catch {
-        /* already ended */
-      }
-      failNoRetry(task, 'cost_cap_exceeded', cap.reason);
-      return;
-    }
 
     const output = parseAgentJson(finalText);
 

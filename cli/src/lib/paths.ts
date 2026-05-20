@@ -16,9 +16,8 @@ export const daemonWsUrl = daemonUrl.replace(/^http/, 'ws') + '/ws';
 export const dashboardUrl =
   process.env['AIFLEET_DASHBOARD_URL'] ?? `http://localhost:${DASHBOARD_PORT}`;
 
-// dashboard/ is the Antd app post phase-11 swap (the retired shadcn app lives
-// in dashboard-legacy/). AIFLEET_DASHBOARD_DIR overrides — e.g. point back at
-// dashboard-legacy to A/B the old UI.
+// dashboard/ is the Antd Next.js app. AIFLEET_DASHBOARD_DIR overrides for
+// non-default layouts.
 const dashboardDir = process.env['AIFLEET_DASHBOARD_DIR'] ?? join(fleetRoot, 'dashboard');
 
 export const paths = {

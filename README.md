@@ -1,6 +1,6 @@
 # ai-fleet
 
-Portable multi-agent orchestrator that drives Claude Code subagents to autonomously work on any project you point it at. The fleet runs as a long-lived daemon with a web dashboard and CLI, and is designed to be dropped onto any codebase through per-stack profiles.
+Portable multi-agent orchestrator that drives Claude Code subagents to autonomously work on any project you point it at. The fleet runs as a long-lived daemon with a web dashboard and CLI.
 
 ## Directory layout
 
@@ -14,10 +14,9 @@ ai-fleet/
 ├── .editorconfig          # editor defaults
 ├── .gitignore
 ├── daemon/                # long-running orchestrator; hosts the Claude Agent SDK
-├── dashboard/             # Next.js 15 web UI (scaffolded in phase 5)
+├── dashboard/             # Next.js 15 + Antd web UI
 ├── cli/                   # user-facing commands to point & control the fleet
 ├── agents/                # global subagent markdown definitions
-├── profiles/              # per-stack profiles (react · node · generic)
 ├── migrations/            # SQLite schema migrations (.sql)
 ├── scripts/               # smoke tests & install helpers
 └── deploy/                # Docker + systemd packaging

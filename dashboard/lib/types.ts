@@ -90,15 +90,6 @@ export interface AgentSummary {
   costUsd: number;
 }
 
-export interface CostRow {
-  key: string;
-  runs: number;
-  costUsd: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-}
-
 export interface Memory {
   id: string;
   projectRoot: string;

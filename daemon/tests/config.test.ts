@@ -14,9 +14,6 @@ describe('config', () => {
     expect(c.default_model).toBe('claude-sonnet-4-6');
     expect(c.orchestrator_model).toBe('claude-opus-4-7');
     expect(c.per_agent_models).toEqual({});
-    expect(c.cost_cap_per_hour_usd).toBe(5.0);
-    expect(c.per_agent_hourly_cap).toBe(0.5);
-    expect(c.per_task_cap_usd).toBe(1.0);
     expect(c.embeddings_provider).toBe('off');
     expect(c.memory).toEqual({ shadow_runs: 10 });
     expect(c.alerts).toEqual({ dashboard_url: 'http://localhost:3737' });

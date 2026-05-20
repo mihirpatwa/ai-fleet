@@ -50,13 +50,13 @@ describe('alerts', () => {
     const config = parseConfig({
       alerts: { slack_webhook: `${base}/slack`, discord_webhook: `${base}/discord` },
     });
-    await createAlerts(config, silent).notify('cost_cap_exceeded', { taskId: 'T9' });
+    await createAlerts(config, silent).notify('security_blocking_finding', { taskId: 'T9' });
     const byUrl = Object.fromEntries(
       received.map((r) => [r.url, r.body as Record<string, unknown>]),
     );
     expect(typeof byUrl['/slack']?.['text']).toBe('string');
     expect(typeof byUrl['/discord']?.['content']).toBe('string');
-    expect(String(byUrl['/slack']?.['text'])).toContain('cost_cap_exceeded');
+    expect(String(byUrl['/slack']?.['text'])).toContain('security_blocking_finding');
   });
 
   it('is a no-throw no-op when no destinations are configured', async () => {

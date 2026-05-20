@@ -4,7 +4,6 @@
 // adaptive memory. Phase 10: cron scheduler + alerts.
 export * from './db.js';
 export * from './config.js';
-export * from './pricing.js';
 export * from './redact.js';
 export * from './bus.js';
 export * from './events.js';
@@ -12,7 +11,6 @@ export * from './time.js';
 export * from './logger.js';
 export * from './sandbox.js';
 export * from './audit.js';
-export * from './costguard.js';
 export * from './security.js';
 export * from './memory.js';
 export * from './mcp/memory.js';

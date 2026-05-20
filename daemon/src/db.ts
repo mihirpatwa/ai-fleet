@@ -199,23 +199,6 @@ export const agentRunRow = z.object({
 });
 export type AgentRun = z.infer<typeof agentRunRow>;
 
-export interface CostSummary {
-  since: string;
-  totalUsd: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  runs: number;
-}
-export interface CostBreakdownRow {
-  key: string | null;
-  runs: number;
-  totalUsd: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-}
-
 /* ---------------------------- mapping --------------------------- */
 
 const TASK_SELECT = `
@@ -329,8 +312,6 @@ export interface FleetDb {
   recordEvent(input: RecordEventInput): FleetEvent;
   listEvents(filter?: ListEventsFilter): FleetEvent[];
   recordAgentRun(input: RecordAgentRunInput): AgentRun;
-  costSince(timestamp: string): CostSummary;
-  costBreakdown(opts: { since: string; by: 'agent' | 'task' | 'day' }): CostBreakdownRow[];
 }
 
 export function createDb(opts: { path?: string } = {}): FleetDb {
@@ -597,54 +578,6 @@ export function createDb(opts: { path?: string } = {}): FleetDb {
         startedAt: row['startedAt'] ?? null,
         finishedAt: row['finishedAt'] ?? null,
       });
-    },
-
-    costSince: (timestamp) => {
-      const r = db
-        .prepare(
-          `SELECT COALESCE(SUM(cost_usd),0)          AS totalUsd,
-                  COALESCE(SUM(input_tokens),0)      AS inputTokens,
-                  COALESCE(SUM(output_tokens),0)     AS outputTokens,
-                  COALESCE(SUM(cache_read_tokens),0) AS cacheReadTokens,
-                  COUNT(*)                           AS runs
-             FROM agent_runs
-            WHERE started_at >= ?`,
-        )
-        .get(timestamp) as Record<string, number>;
-      return {
-        since: timestamp,
-        totalUsd: Number(r['totalUsd'] ?? 0),
-        inputTokens: Number(r['inputTokens'] ?? 0),
-        outputTokens: Number(r['outputTokens'] ?? 0),
-        cacheReadTokens: Number(r['cacheReadTokens'] ?? 0),
-        runs: Number(r['runs'] ?? 0),
-      };
-    },
-
-    costBreakdown: ({ since, by }) => {
-      const groupExpr = by === 'agent' ? 'agent' : by === 'task' ? 'task_id' : 'date(started_at)';
-      const rows = db
-        .prepare(
-          `SELECT ${groupExpr}                       AS key,
-                  COUNT(*)                           AS runs,
-                  COALESCE(SUM(cost_usd),0)          AS totalUsd,
-                  COALESCE(SUM(input_tokens),0)      AS inputTokens,
-                  COALESCE(SUM(output_tokens),0)     AS outputTokens,
-                  COALESCE(SUM(cache_read_tokens),0) AS cacheReadTokens
-             FROM agent_runs
-            WHERE started_at >= ?
-            GROUP BY ${groupExpr}
-            ORDER BY totalUsd DESC`,
-        )
-        .all(since) as Record<string, unknown>[];
-      return rows.map((r) => ({
-        key: (r['key'] ?? null) as string | null,
-        runs: Number(r['runs'] ?? 0),
-        totalUsd: Number(r['totalUsd'] ?? 0),
-        inputTokens: Number(r['inputTokens'] ?? 0),
-        outputTokens: Number(r['outputTokens'] ?? 0),
-        cacheReadTokens: Number(r['cacheReadTokens'] ?? 0),
-      }));
     },
   };
 

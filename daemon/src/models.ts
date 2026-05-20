@@ -7,7 +7,6 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from 'pino';
 import { aifleetDir } from './config.js';
-import { getPricing, hasExactPricing, type ModelPricing } from './pricing.js';
 
 export interface RawModel {
   id: string;
@@ -20,7 +19,6 @@ export interface ModelInfo {
   id: string;
   display_name: string;
   context_window: number;
-  pricing: { input_per_mtok: number; output_per_mtok: number; cache_read: number } | null;
   recommended_for: string[];
 }
 
@@ -68,12 +66,10 @@ function modelsJsonPath(): string {
 }
 
 function toInfo(m: RawModel): ModelInfo {
-  const p: ModelPricing | undefined = getPricing(m.id);
   return {
     id: m.id,
     display_name: m.display_name,
     context_window: contextWindow(m.id),
-    pricing: p ? { input_per_mtok: p.input, output_per_mtok: p.output, cache_read: p.cacheRead } : null,
     recommended_for: recommendedFor(m.id, m.display_name),
   };
 }
@@ -146,16 +142,6 @@ export function createModelRegistry(logger: Logger): ModelRegistry {
     }
   }
 
-  function warnUnknown(): void {
-    for (const m of raw) {
-      // Exact-id miss (only a family-prefix fallback would match) → operator
-      // should add it to pricing.ts so cost accounting stays exact.
-      if (!hasExactPricing(m.id)) {
-        logger.warn({ model: m.id }, 'new model has no exact pricing entry — add it to pricing.ts');
-      }
-    }
-  }
-
   async function refresh(): Promise<ModelInfo[]> {
     const fresh = await fetchFromAnthropic();
     if (fresh) {
@@ -164,7 +150,6 @@ export function createModelRegistry(logger: Logger): ModelRegistry {
       persist();
       logger.info({ count: raw.length }, 'models refreshed from anthropic');
     }
-    warnUnknown();
     return list();
   }
 
@@ -179,7 +164,6 @@ export function createModelRegistry(logger: Logger): ModelRegistry {
     refresh,
     start() {
       loadCached();
-      warnUnknown();
       // Stale (or never fetched) → kick a background refresh now.
       if (Date.now() - fetchedAt > REFRESH_MS) void refresh();
       timer = setInterval(() => void refresh(), REFRESH_MS);

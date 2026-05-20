@@ -9,7 +9,7 @@ import { z } from 'zod';
 import type { FleetBus, SessionTaskMap } from './bus.js';
 import type { FleetConfig } from './config.js';
 import { fleetConfigSchema, saveConfig } from './config.js';
-import { EVENT_TYPES, TASK_STATUSES, tsMsAgo, type FleetDb, type TaskStatus } from './db.js';
+import { EVENT_TYPES, TASK_STATUSES, type FleetDb, type TaskStatus } from './db.js';
 import { recordAndBroadcast } from './events.js';
 import { onToolUsePost, onToolUsePre } from './hooks.js';
 import type { ModelRegistry } from './models.js';
@@ -112,7 +112,6 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       .all() as Array<{ status: string; c: number }>;
     const byStatus = new Map(statusRows.map((r) => [r.status, r.c]));
     const events = db.raw.prepare('SELECT COUNT(*) AS c FROM events').get() as { c: number };
-    const cost = db.costSince(tsMsAgo(3_600_000));
     const body = prom([
       ['aifleet_up', 'Daemon liveness', 'gauge', [[{}, 1]]],
       ['aifleet_uptime_seconds', 'Process uptime', 'gauge', [[{}, Math.floor(process.uptime())]]],
@@ -125,8 +124,6 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
         ),
       ],
       ['aifleet_events_total', 'Total recorded events', 'counter', [[{}, events.c]]],
-      ['aifleet_cost_usd_last_hour', 'Agent cost in the last hour', 'gauge', [[{}, cost.totalUsd]]],
-      ['aifleet_agent_runs_last_hour', 'Agent runs in the last hour', 'gauge', [[{}, cost.runs]]],
       [
         'aifleet_agents_in_flight',
         'Currently streaming SDK queries',
@@ -482,28 +479,6 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     }
     logger.info({ keys: Object.keys(patch), restartNeeded }, 'config updated via API');
     return { ok: true, restartNeeded, config };
-  });
-
-  // Median cost of recent runs for an agent (last 30 days, ≤10 most recent) —
-  // powers the SubmitGoal cost preview. null when there's not enough data.
-  app.get('/cost/estimate', (req) => {
-    const q = (req.query ?? {}) as Record<string, string | undefined>;
-    const agent = q['agent'];
-    if (!agent) return { agent: null, estimateUsd: null, samples: 0 };
-    const rows = db.raw
-      .prepare(
-        `SELECT cost_usd AS c FROM agent_runs
-          WHERE agent = ? AND cost_usd IS NOT NULL
-            AND started_at >= ?
-          ORDER BY started_at DESC LIMIT 10`,
-      )
-      .all(agent, tsMsAgo(30 * 24 * 3_600_000)) as Array<{ c: number }>;
-    const costs = rows.map((r) => Number(r.c)).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
-    if (costs.length === 0) return { agent, estimateUsd: null, samples: 0 };
-    const mid = Math.floor(costs.length / 2);
-    const median =
-      costs.length % 2 === 0 ? (costs[mid - 1]! + costs[mid]!) / 2 : costs[mid]!;
-    return { agent, estimateUsd: median, samples: costs.length };
   });
 
   // ------------------ Phase 14: directory resolver ------------------

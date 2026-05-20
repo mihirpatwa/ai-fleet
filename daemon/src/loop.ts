@@ -1,11 +1,11 @@
-// The scheduler. Every poll interval it checks the hourly cost cap, computes
-// free concurrency slots, claims that many ready tasks and dispatches them
-// through a p-limit gate. Shutdown stops scheduling, drains in-flight runs and
-// interrupts the SDK; the entrypoint closes the DB afterwards.
+// The scheduler. Every poll interval it computes free concurrency slots,
+// claims that many ready tasks and dispatches them through a p-limit gate.
+// Shutdown stops scheduling, drains in-flight runs and interrupts the SDK;
+// the entrypoint closes the DB afterwards.
 import pLimit from 'p-limit';
 import type { Logger } from 'pino';
 import type { FleetConfig } from './config.js';
-import { tsMsAgo, type FleetDb } from './db.js';
+import type { FleetDb } from './db.js';
 import type { Spawner } from './spawn.js';
 
 export interface LoopDeps {
@@ -22,8 +22,6 @@ export interface Loop {
   tick(): void;
 }
 
-const HOUR_MS = 3_600_000;
-
 export function createLoop(deps: LoopDeps): Loop {
   const { db, config, spawner, logger } = deps;
   const limit = pLimit(config.max_concurrent_agents);
@@ -38,15 +36,6 @@ export function createLoop(deps: LoopDeps): Loop {
 
   function tick(): void {
     if (stopping) return;
-
-    const spent = db.costSince(tsMsAgo(HOUR_MS)).totalUsd;
-    if (spent >= config.cost_cap_per_hour_usd) {
-      logger.warn(
-        { spentUsd: spent, capUsd: config.cost_cap_per_hour_usd },
-        'hourly cost cap reached; skipping tick',
-      );
-      return;
-    }
 
     const slots = config.max_concurrent_agents - claimed.size;
     if (slots <= 0) return;
@@ -81,7 +70,6 @@ export function createLoop(deps: LoopDeps): Loop {
         {
           pollMs: config.poll_interval_ms,
           maxConcurrent: config.max_concurrent_agents,
-          costCapUsd: config.cost_cap_per_hour_usd,
         },
         'scheduler started',
       );

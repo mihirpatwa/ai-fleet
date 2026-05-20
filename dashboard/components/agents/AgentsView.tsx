@@ -7,7 +7,7 @@ import { App, Select, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { AgentSummary } from '@/lib/types';
 import { roleColor } from '@/lib/theme';
-import { ago, usd } from '@/lib/format';
+import { ago } from '@/lib/format';
 import { groupByTier, ctxLabel, priceLabel, jsonFetcher, type ActiveModels, type ModelInfo } from '@/lib/models';
 
 function tint(hex: string): React.CSSProperties {
@@ -71,7 +71,6 @@ export function AgentsView({ rows }: { rows: AgentSummary[] }) {
     { title: 'Done', dataIndex: 'done', align: 'right' },
     { title: 'Failed', dataIndex: 'failed', align: 'right' },
     { title: 'Total', dataIndex: 'total', align: 'right' },
-    { title: 'Cost', key: 'cost', align: 'right', render: (_, r) => usd(r.costUsd) },
     {
       title: 'Model',
       key: 'model',

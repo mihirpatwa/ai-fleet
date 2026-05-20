@@ -1,9 +1,9 @@
 'use client';
 // Settings. Theme is a client store (applies instantly). Daemon-backed sections
-// (Default model, Per-agent models, Concurrency, Cost caps, Memory) persist via
-// PUT /api/config or PUT /api/models/agent/*; the daemon reports which changed
-// keys need a restart and we surface that as a banner. Security/retention knobs
-// not yet wired to the daemon are shown disabled rather than faked.
+// (Default model, Per-agent models, Concurrency, Memory) persist via PUT
+// /api/config or PUT /api/models/agent/*; the daemon reports which changed keys
+// need a restart and we surface that as a banner. Security/retention knobs not
+// yet wired to the daemon are shown disabled rather than faked.
 import { useEffect, useState } from 'react';
 import useSWR from 'swr';
 import {
@@ -39,9 +39,6 @@ const { Text, Title, Paragraph } = Typography;
 
 interface DaemonConfig {
   max_concurrent_agents: number;
-  cost_cap_per_hour_usd: number;
-  per_agent_hourly_cap: number;
-  per_task_cap_usd: number;
   memory: { shadow_runs: number };
 }
 
@@ -158,9 +155,6 @@ export function SettingsView() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           max_concurrent_agents: draft.max_concurrent_agents,
-          cost_cap_per_hour_usd: draft.cost_cap_per_hour_usd,
-          per_agent_hourly_cap: draft.per_agent_hourly_cap,
-          per_task_cap_usd: draft.per_task_cap_usd,
           memory: { shadow_runs: draft.memory.shadow_runs },
         }),
       });
@@ -185,9 +179,7 @@ export function SettingsView() {
   const modifiedKeys = (() => {
     if (!draft || !config) return new Set<keyof DaemonConfig | 'memory.shadow_runs'>();
     const m = new Set<keyof DaemonConfig | 'memory.shadow_runs'>();
-    (['max_concurrent_agents', 'cost_cap_per_hour_usd', 'per_agent_hourly_cap', 'per_task_cap_usd'] as const).forEach((k) => {
-      if (draft[k] !== config[k]) m.add(k);
-    });
+    if (draft.max_concurrent_agents !== config.max_concurrent_agents) m.add('max_concurrent_agents');
     if (draft.memory.shadow_runs !== config.memory.shadow_runs) m.add('memory.shadow_runs');
     return m;
   })();
@@ -333,42 +325,6 @@ export function SettingsView() {
         </Space>
       </Section>
 
-      <Section
-        title="Cost caps (USD)"
-        hint="Hard limits. Daemon blocks new agent spawns once any cap is exceeded."
-      >
-        <Space size="large" wrap>
-          {(
-            [
-              ['Per hour', 'cost_cap_per_hour_usd', 'Total across all agents.'],
-              ['Per agent / hour', 'per_agent_hourly_cap', 'Stops a single agent from running away.'],
-              ['Per task', 'per_task_cap_usd', 'Absolute ceiling for one goal.'],
-            ] as const
-          ).map(([label, key, hint]) => (
-            <Space key={key} direction="vertical" size={2} style={{ minWidth: 180 }}>
-              <Space size={4}>
-                <Text strong style={{ fontSize: 12 }}>
-                  {label}
-                </Text>
-                <ModifiedTag on={modifiedKeys.has(key)} />
-              </Space>
-              <InputNumber
-                min={0}
-                step={0.1}
-                prefix="$"
-                style={{ width: 140 }}
-                value={draft?.[key] ?? 0}
-                onChange={(v) =>
-                  setDraft((d) => (d ? { ...d, [key]: Number(v ?? 0) } : d))
-                }
-              />
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                {hint}
-              </Text>
-            </Space>
-          ))}
-        </Space>
-      </Section>
 
       <Section
         title="Memory"

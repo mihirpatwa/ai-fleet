@@ -8,7 +8,7 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Card, Col, Empty, Row, Statistic, Tabs, Tag, Typography } from 'antd';
 import type { FleetEvent, TaskMetrics, TaskNode } from '@/lib/types';
-import { compact, pretty, usd } from '@/lib/format';
+import { compact, pretty } from '@/lib/format';
 import { statusColor } from '@/lib/theme';
 
 const { Text } = Typography;
@@ -151,7 +151,6 @@ export function TaskTabs({
               { label: 'Input tokens', value: compact(metrics.inputTokens) },
               { label: 'Output tokens', value: compact(metrics.outputTokens) },
               { label: 'Cached tokens', value: compact(metrics.cacheReadTokens) },
-              { label: 'Cost', value: usd(metrics.costUsd) },
               {
                 label: 'Duration',
                 value:

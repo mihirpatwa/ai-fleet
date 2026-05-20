@@ -13,9 +13,9 @@ ai-fleet status --watch  # live task tree
 ai-fleet down            # stop
 ```
 
-Other commands: `logs`, `cost`, `stop <task-id>`, `memory list|show|compact|export|import`.
+Other commands: `logs`, `stop <task-id>`, `memory list|show|compact|export|import`.
 
-See `QUICKSTART.md`, `ARCHITECTURE.md`, and `TROUBLESHOOTING.md` in the repo
-for the full picture and 24/7 deployment (`deploy/`).
+See `ARCHITECTURE.md` and `deploy/INSTALL.md` for the full picture and 24/7
+deployment.
 
 Requires Node ≥ 20 and either `ANTHROPIC_API_KEY` or a logged-in Claude Code.

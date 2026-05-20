@@ -1,6 +1,4 @@
-# dashboard/ is the Antd app (phase 11–14 rebuild). dashboard-legacy/ is the
-# retired shadcn app, kept in git for one release — intentionally NOT a
-# workspace package so it isn't installed/built.
+# Workspace packages.
 packages:
   - daemon
   - dashboard

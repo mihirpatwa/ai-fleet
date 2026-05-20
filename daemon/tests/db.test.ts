@@ -133,7 +133,7 @@ describe('db state layer', () => {
     db.close();
   });
 
-  it('records events and agent runs; costSince aggregates', () => {
+  it('records events and agent runs', () => {
     const db = mem();
     const t = db.createTask({ projectRoot: '/p', title: 'c', assignedAgent: 'coder' });
     const ev = db.recordEvent({
@@ -149,15 +149,11 @@ describe('db state layer', () => {
       taskId: t.id,
       agent: 'coder',
       model: 'claude-sonnet-4-6',
-      costUsd: 0.25,
+      costUsd: 0,
       inputTokens: 100,
       outputTokens: 50,
       startedAt: '2000-01-01 00:00:00',
     });
-    const c = db.costSince('1999-01-01 00:00:00');
-    expect(c.runs).toBe(1);
-    expect(c.totalUsd).toBeCloseTo(0.25);
-    expect(c.inputTokens).toBe(100);
     db.close();
   });
 });

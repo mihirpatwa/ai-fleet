@@ -7,7 +7,6 @@ import { Badge, Card, Empty, Grid, Typography } from 'antd';
 import type { Task } from '@/lib/types';
 import { FilterBar, type GoalOption } from './FilterBar';
 import { TaskCard, type CardData } from './TaskCard';
-import { LiveAgentStrip } from './LiveAgentStrip';
 
 const COLUMNS: { name: string; has: (s: Task['status']) => boolean }[] = [
   { name: 'Backlog', has: (s) => s === 'queued' },
@@ -49,7 +48,6 @@ export function Board({
 
   return (
     <div>
-      <LiveAgentStrip cards={cards} />
       <FilterBar goals={goals} agents={agents} />
 
       {cards.length === 0 ? (

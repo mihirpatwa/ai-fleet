@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { Command } from 'commander';
 import pc from 'picocolors';
-import { createDb, tsMsAgo, type FleetEvent, type Task } from '../db.js';
+import { createDb, type FleetEvent, type Task } from '../db.js';
 import { loadConfig } from '../config.js';
 import {
   compact as memoryCompact,
@@ -32,19 +32,6 @@ function statusColor(s: string): string {
     default:
       return s;
   }
-}
-
-function parseSince(input: string): { ts: string; label: string } {
-  const m = /^(\d+)([dwm])$/.exec(input);
-  if (!m) {
-    console.error(`invalid --since "${input}" (use e.g. 1d, 1w, 1m)`);
-    process.exit(1);
-  }
-  const n = Number(m[1]);
-  const unit = m[2];
-  const dayMs = 86_400_000;
-  const ms = unit === 'd' ? n * dayMs : unit === 'w' ? n * 7 * dayMs : n * 30 * dayMs;
-  return { ts: tsMsAgo(ms), label: input };
 }
 
 function printEvent(e: FleetEvent): void {
@@ -125,43 +112,6 @@ program
     });
   });
 
-program
-  .command('cost')
-  .description('aggregate agent-run cost')
-  .option('--since <window>', 'e.g. 1d, 1w, 1m', '1d')
-  .option('--by <dimension>', 'agent|task|day')
-  .action((opts: { since: string; by?: string }) => {
-    const db = createDb();
-    try {
-      const { ts, label } = parseSince(opts.since);
-      if (opts.by) {
-        if (!['agent', 'task', 'day'].includes(opts.by)) {
-          console.error(`invalid --by "${opts.by}" (use agent|task|day)`);
-          process.exit(1);
-        }
-        const rows = db.costBreakdown({ since: ts, by: opts.by as 'agent' | 'task' | 'day' });
-        if (rows.length === 0) {
-          console.log(`no agent runs since ${label}`);
-          return;
-        }
-        for (const r of rows) {
-          console.log(
-            `${(r.key ?? '(none)').padEnd(26)}  ${pc.green(`$${r.totalUsd.toFixed(4)}`)}  ${
-              r.runs
-            } run(s)  ${r.inputTokens}in/${r.outputTokens}out`,
-          );
-        }
-      } else {
-        const c = db.costSince(ts);
-        console.log(
-          `since ${label}: ${pc.green(`$${c.totalUsd.toFixed(4)}`)} over ${c.runs} run(s)  ` +
-            `tokens ${c.inputTokens}in/${c.outputTokens}out/${c.cacheReadTokens}cache`,
-        );
-      }
-    } finally {
-      db.close();
-    }
-  });
 
 program
   .command('tree')

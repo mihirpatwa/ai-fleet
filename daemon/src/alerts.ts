@@ -5,8 +5,6 @@ import type { Logger } from 'pino';
 import type { FleetConfig } from './config.js';
 
 export type AlertEvent =
-  | 'cost_cap_warning_80'
-  | 'cost_cap_exceeded'
   | 'security_blocking_finding'
   | 'goal_completed'
   | 'goal_failed'

@@ -18,7 +18,6 @@ import {
 import {
   AppstoreOutlined,
   DatabaseOutlined,
-  DollarOutlined,
   FlagOutlined,
   MenuOutlined,
   RobotOutlined,
@@ -41,7 +40,6 @@ const NAV = [
   { key: '/goals', label: 'Goals', icon: <FlagOutlined /> },
   { key: '/agents', label: 'Agents', icon: <RobotOutlined /> },
   { key: '/memory', label: 'Memory', icon: <DatabaseOutlined /> },
-  { key: '/cost', label: 'Cost', icon: <DollarOutlined /> },
   { key: '/security', label: 'Security', icon: <SafetyOutlined /> },
   { key: '/schedules', label: 'Schedules', icon: <ScheduleOutlined /> },
   { key: '/settings', label: 'Settings', icon: <SettingOutlined /> },

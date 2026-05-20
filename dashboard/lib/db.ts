@@ -10,7 +10,6 @@ import { join } from 'node:path';
 import type {
   AgentRun,
   AgentSummary,
-  CostRow,
   FleetEvent,
   Memory,
   SecurityFinding,
@@ -340,61 +339,6 @@ export function agentSummaries(project?: string): AgentSummary[] {
     }
   }
   return [...byAgent.values()].sort((a, b) => b.total - a.total);
-}
-
-export function costBreakdown(by: 'agent' | 'model' | 'day'): CostRow[] {
-  const expr = by === 'agent' ? 'agent' : by === 'model' ? 'model' : 'date(started_at)';
-  return safe(
-    (d) =>
-      (
-        d
-          .prepare(
-            `SELECT ${expr} AS key, COUNT(*) AS runs, COALESCE(SUM(cost_usd),0) AS costUsd,
-              COALESCE(SUM(input_tokens),0) AS inputTokens,
-              COALESCE(SUM(output_tokens),0) AS outputTokens,
-              COALESCE(SUM(cache_read_tokens),0) AS cacheReadTokens
-             FROM agent_runs GROUP BY ${expr} ORDER BY costUsd DESC`,
-          )
-          .all() as Record<string, unknown>[]
-      ).map((r) => ({
-        key: r['key'] == null ? '(none)' : String(r['key']),
-        runs: Number(r['runs'] ?? 0),
-        costUsd: Number(r['costUsd'] ?? 0),
-        inputTokens: Number(r['inputTokens'] ?? 0),
-        outputTokens: Number(r['outputTokens'] ?? 0),
-        cacheReadTokens: Number(r['cacheReadTokens'] ?? 0),
-      })),
-    [],
-  );
-}
-
-export function costTotals(): {
-  costUsd: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  runs: number;
-} {
-  return safe(
-    (d) => {
-      const r = d
-        .prepare(
-          `SELECT COALESCE(SUM(cost_usd),0) AS costUsd, COALESCE(SUM(input_tokens),0) AS inputTokens,
-            COALESCE(SUM(output_tokens),0) AS outputTokens,
-            COALESCE(SUM(cache_read_tokens),0) AS cacheReadTokens, COUNT(*) AS runs
-           FROM agent_runs`,
-        )
-        .get() as Record<string, number>;
-      return {
-        costUsd: Number(r['costUsd'] ?? 0),
-        inputTokens: Number(r['inputTokens'] ?? 0),
-        outputTokens: Number(r['outputTokens'] ?? 0),
-        cacheReadTokens: Number(r['cacheReadTokens'] ?? 0),
-        runs: Number(r['runs'] ?? 0),
-      };
-    },
-    { costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, runs: 0 },
-  );
 }
 
 const SEV_RANK: Record<Severity, number> = { critical: 0, high: 1, med: 2, low: 3 };

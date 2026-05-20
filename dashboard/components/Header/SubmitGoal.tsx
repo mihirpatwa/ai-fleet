@@ -22,7 +22,6 @@ import { AGENTS } from '@/lib/agents';
 import {
   groupByTier,
   ctxLabel,
-  priceLabel,
   jsonFetcher,
   type ActiveModels,
   type ModelInfo,
@@ -31,11 +30,6 @@ import { pickDirectory } from '@/lib/dirPicker';
 
 const { Text, Paragraph } = Typography;
 
-interface CostEstimate {
-  agent: string | null;
-  estimateUsd: number | null;
-  samples: number;
-}
 interface RecentProject {
   absolutePath: string;
   name: string;
@@ -68,11 +62,6 @@ export function SubmitGoal({ project }: { project: string }) {
     jsonFetcher,
     { revalidateOnFocus: false },
   );
-  const { data: est } = useSWR<CostEstimate>(
-    `/api/cost-estimate?agent=${encodeURIComponent(agent)}`,
-    jsonFetcher,
-    { revalidateOnFocus: false },
-  );
 
   // Reset to defaults whenever the modal opens.
   useEffect(() => {
@@ -94,15 +83,10 @@ export function SubmitGoal({ project }: { project: string }) {
       title: g.tier,
       options: g.models.map((m) => ({
         value: m.id,
-        label: `${m.display_name} — ${ctxLabel(m.context_window)}, ${priceLabel(m.pricing)}`,
+        label: `${m.display_name} — ${ctxLabel(m.context_window)}`,
       })),
     })),
   ];
-
-  const costLine =
-    est && est.estimateUsd != null
-      ? `~$${est.estimateUsd.toFixed(2)} per goal (median of last ${est.samples} ${agent} task${est.samples === 1 ? '' : 's'})`
-      : 'no cost estimate yet — first run gathers a sample';
 
   async function choosePick(): Promise<void> {
     const o = await pickDirectory();
@@ -275,9 +259,6 @@ export function SubmitGoal({ project }: { project: string }) {
                 <Tag color="purple">{agent}</Tag>
                 <Tag color="blue">{effectiveModel || 'default'}</Tag>
               </Space>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {costLine}
-              </Text>
             </Space>
           </div>
         </Form>

@@ -108,10 +108,6 @@ export const fleetConfigSchema = z.object({
       '/workspace',
       '/srv',
     ]),
-  cost_cap_per_hour_usd: z.number().min(0).default(5.0),
-  // Phase-8 circuit breakers (per-agent/hour + per-task absolute).
-  per_agent_hourly_cap: z.number().min(0).default(0.5),
-  per_task_cap_usd: z.number().min(0).default(1.0),
   // Phase-9 adaptive memory.
   embeddings_provider: z.string().default('off'),
   memory: memoryPolicy,

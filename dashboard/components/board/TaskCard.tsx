@@ -1,12 +1,13 @@
 'use client';
-// Kanban card. shadcn Card/Badge/Progress → Antd Card/Tag/Progress. The role
-// Tag uses a theme-agnostic tint (hex + ~12% alpha bg) so it reads on light
-// and dark. Whole card links to the task detail page.
+// Kanban card. Role Tag uses a theme-agnostic tint (hex + ~12% alpha bg) so it
+// reads on light and dark. Whole card links to the task detail page. Phase 17
+// dropped the per-card Progress bar (it was always 0→100 with no intermediate
+// signal from the SDK, so it added noise without information).
 import Link from 'next/link';
-import { Card, Progress, Tag, Typography } from 'antd';
+import { Card, Tag, Typography } from 'antd';
 import { ClockCircleOutlined } from '@ant-design/icons';
 import type { Task } from '@/lib/types';
-import { roleColor, statusColor } from '@/lib/theme';
+import { roleColor } from '@/lib/theme';
 import { elapsed, parseTs, truncate } from '@/lib/format';
 import { useTicker } from '@/lib/useTicker';
 
@@ -66,14 +67,6 @@ export function TaskCard({ task, tool, log }: CardData) {
             using {tool}
           </Text>
         )}
-
-        <Progress
-          percent={task.progress}
-          showInfo={false}
-          size="small"
-          strokeColor={statusColor(task.status)}
-          style={{ marginTop: 8, marginBottom: 0 }}
-        />
 
         {log && (
           <Text
