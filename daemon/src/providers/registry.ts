@@ -18,9 +18,10 @@ export const PROVIDERS: ProviderMeta[] = [
     display_name: 'OpenAI Codex',
     logo: '/providers/openai.svg',
     tagline:
-      'OpenAI GPT-5 / Codex CLI — agent loop via `codex exec`. Sandbox adapter pending so the phase-8 denylist still holds.',
+      'OpenAI GPT-5 / Codex CLI — would dispatch via `codex exec`. Held back because Codex has no per-tool gate equivalent to Claude SDK `canUseTool`, so the phase-8 sandbox denylist can\'t be enforced without an OS-level wrapper.',
     available: false,
-    reason: 'Sandbox adapter pending — phase 18c.',
+    reason:
+      'Needs an OS-level sandbox wrapper (firejail on Linux / sandbox-exec on macOS / no native option on Windows). See ARCHITECTURE.md "Codex roadmap".',
     auth_methods: ['api_key'],
     capabilities: { toolGate: false, mcp: false, agentLoop: true, streaming: true },
   },

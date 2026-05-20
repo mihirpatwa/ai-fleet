@@ -74,6 +74,28 @@ ai-fleet submit         dashboard /api/tasks
 - **`<project>/CLAUDE.md`** (including the regenerated `## Learned conventions` section) — **commit it** to share lessons with teammates.
 - **Cold memory / audit / state** live in `~/.aifleet` (Docker `/data` volume) — machine-local; export/share with `ai-fleet memory export|import`.
 
+## Codex roadmap (18c) — why it's still disabled
+
+OpenAI's `codex exec` is a viable second runtime in principle, but it ships
+without a per-tool permission gate equivalent to Claude Agent SDK's
+`canUseTool`. The phase-8 sandbox (`daemon/src/sandbox.ts`) relies on that
+callback to deny/allow each tool call against the denylist + env-file rule.
+We don't want Codex to silently bypass that surface, so the modal card stays
+`available: false` until one of these lands:
+
+- **Linux:** wrap `codex exec` in `firejail --net=none --whitelist=<projectRoot>`
+  so filesystem reads/writes outside the project tree fail at the kernel.
+- **macOS:** spawn under `sandbox-exec` with a profile that mirrors
+  `sandbox.hardDenied()` (deny `(file-write*)` to `~/.ssh`, `~/.aws`,
+  `/etc`, …).
+- **Windows:** no native option; either AppContainer (heavy lift) or skip
+  Codex on Windows.
+
+When that wrapper exists, flip the registry entry to `available: true` and
+implement `daemon/src/providers/codex.ts` (`spawn codex exec --json ...`,
+parse the JSONL stream into the same normalized events we emit for Claude).
+Until then, Claude is the only runtime and the modal card explains why.
+
 ## Notable deliberate deviations
 
 - **No cost guardrails** (phase 17). User chose full removal; `max_retries=3` is the only auto-stop on runaway agents.
