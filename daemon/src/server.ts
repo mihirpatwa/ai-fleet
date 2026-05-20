@@ -599,6 +599,9 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
         ? { env: Object.fromEntries(Object.entries(b.env).map(([k, v]) => [k, String(v)])) }
         : {}),
       ...(b.preset === true ? { preset: true } : {}),
+      ...(Array.isArray(b.allowed_agents)
+        ? { allowed_agents: b.allowed_agents.map(String) }
+        : {}),
     };
     const merged = upsertMcpServer(next);
     logger.info({ name, enabled: next.enabled }, 'mcp server upserted');

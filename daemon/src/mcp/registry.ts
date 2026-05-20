@@ -24,6 +24,13 @@ export interface McpServerConfig {
   /** True when the entry matches one of the bundled PRESETS — we can show a
    * subtler "Edit" UI vs. a custom "Edit + Delete". */
   preset?: boolean;
+  /**
+   * p5: per-agent allowlist. When empty/undefined every spawned agent gets
+   * this MCP; otherwise only agents in this list do (tester gets Chrome,
+   * coder doesn't, etc.). Empty array means "no agents" — effectively
+   * disabled but kept for clarity in the UI.
+   */
+  allowed_agents?: string[];
 }
 
 export interface McpPreset extends Omit<McpServerConfig, 'enabled'> {
@@ -133,12 +140,22 @@ export function listMergedServers(): McpServerConfig[] {
   return out;
 }
 
-/** Enabled servers in the shape Claude SDK options.mcpServers expects. */
-export function buildSdkMcpServers(): Record<
-  string,
-  { type: 'stdio'; command: string; args: string[]; env?: Record<string, string> }
-> {
-  const enabled = listMergedServers().filter((s) => s.enabled);
+/**
+ * Enabled servers in the shape Claude SDK options.mcpServers expects.
+ * `agent` filters by per-server allowlist (p5): undefined = no agent context
+ * (returns every enabled server); otherwise only servers whose allowlist
+ * includes `agent` are returned. Servers without an allowlist are always
+ * included.
+ */
+export function buildSdkMcpServers(
+  agent?: string,
+): Record<string, { type: 'stdio'; command: string; args: string[]; env?: Record<string, string> }> {
+  const enabled = listMergedServers().filter((s) => {
+    if (!s.enabled) return false;
+    if (!agent) return true;
+    if (!s.allowed_agents || s.allowed_agents.length === 0) return true;
+    return s.allowed_agents.includes(agent);
+  });
   const out: Record<
     string,
     { type: 'stdio'; command: string; args: string[]; env?: Record<string, string> }

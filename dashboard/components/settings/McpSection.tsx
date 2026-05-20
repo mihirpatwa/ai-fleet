@@ -13,12 +13,14 @@ import {
   Form,
   Input,
   Modal,
+  Select,
   Space,
   Switch,
   Tag,
   Tooltip,
   Typography,
 } from 'antd';
+import { AGENTS } from '@/lib/agents';
 import {
   CheckCircleTwoTone,
   CloseCircleTwoTone,
@@ -40,6 +42,8 @@ interface McpServer {
   env?: Record<string, string>;
   enabled: boolean;
   preset?: boolean;
+  /** Empty/undefined = every agent. Non-empty = whitelist. */
+  allowed_agents?: string[];
 }
 
 interface McpPreset {
@@ -153,6 +157,20 @@ export function McpSection() {
                   >
                     {s.command} {s.args.join(' ')}
                   </Text>
+                  <Space size={4} wrap>
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      Visible to:
+                    </Text>
+                    {!s.allowed_agents || s.allowed_agents.length === 0 ? (
+                      <Tag color="default">all agents</Tag>
+                    ) : (
+                      s.allowed_agents.map((a) => (
+                        <Tag key={a} color="purple">
+                          {a}
+                        </Tag>
+                      ))
+                    )}
+                  </Space>
                 </Space>
                 <Space>
                   {(() => {
@@ -242,6 +260,7 @@ function EditModal({
   const [command, setCommand] = useState('npx');
   const [argsRaw, setArgsRaw] = useState('');
   const [env, setEnv] = useState<Record<string, string>>({});
+  const [allowedAgents, setAllowedAgents] = useState<string[]>([]);
 
   // Reset on open
   if (open && value && name !== value.name) {
@@ -249,6 +268,7 @@ function EditModal({
     setCommand(value.command);
     setArgsRaw(value.args.join(' '));
     setEnv(value.env ?? {});
+    setAllowedAgents(value.allowed_agents ?? []);
   }
 
   async function submit(): Promise<void> {
@@ -259,6 +279,8 @@ function EditModal({
       command: command.trim(),
       args: argsRaw.split(/\s+/).filter(Boolean),
       env: Object.keys(env).length ? env : undefined,
+      // Empty allowlist persisted as undefined = "all agents".
+      allowed_agents: allowedAgents.length > 0 ? allowedAgents : undefined,
     } as McpServer;
     await onSave(next);
   }
@@ -323,6 +345,20 @@ function EditModal({
             ))}
           </>
         )}
+
+        <Form.Item
+          label="Agent allowlist"
+          help="Leave empty to expose this MCP to every spawned agent. Pick one or more to restrict it (e.g. only the tester gets a browser)."
+        >
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="All agents"
+            value={allowedAgents}
+            onChange={setAllowedAgents}
+            options={AGENTS.map((a) => ({ value: a, label: a }))}
+          />
+        </Form.Item>
       </Form>
     </Modal>
   );

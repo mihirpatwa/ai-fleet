@@ -409,7 +409,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
           taskId: task.id,
           shadow: shadowRemaining > 0,
         }),
-        ...buildSdkMcpServers(),
+        ...buildSdkMcpServers(task.assignedAgent),
       },
       // No bypassPermissions: canUseTool mediates EVERY tool call (sandbox +
       // network egress + audit). Returning allow is the headless approval.
