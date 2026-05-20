@@ -362,7 +362,7 @@ export function SettingsView() {
 
       <Section
         title="Caches"
-        hint="In-process LRU for Azure attachment bytes — drops PAT round-trips on repeated drawer opens."
+        hint="In-process LRU for Azure attachment bytes. MCP probes are NOT cached — each Probe button re-spawns the command. Project users have their own 5-min server-side cache (not cleared here)."
       >
         <AttachmentCacheCard />
       </Section>

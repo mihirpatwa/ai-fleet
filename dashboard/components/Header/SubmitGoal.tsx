@@ -168,6 +168,30 @@ export function SubmitGoal({ project }: { project: string }) {
     if (storeOpen) setOpen(true);
   }, [storeOpen, storeShowCount]);
 
+  // v13: Cmd/Ctrl+K opens the modal and focuses the goal textarea (common
+  // AI-app pattern). Bails when focus is inside any other text field.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent): void {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'k') return;
+      const t = e.target as HTMLElement | null;
+      const inOtherInput =
+        !!t &&
+        (t.tagName === 'INPUT' || t.isContentEditable) &&
+        t.getAttribute('data-aifleet-goal') !== '1';
+      if (inOtherInput) return;
+      e.preventDefault();
+      if (!open) setOpen(true);
+      setTimeout(() => {
+        const ta = document.querySelector<HTMLTextAreaElement>(
+          'textarea[data-aifleet-goal="1"]',
+        );
+        ta?.focus();
+      }, 50);
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+
   // Auto-open the modal when arrived with ?openGoalModal=1 (Work items
   // "Send as goal" route). One-shot: strip the param so a back-nav doesn't
   // re-fire.
@@ -327,12 +351,13 @@ export function SubmitGoal({ project }: { project: string }) {
           <Form.Item
             label="Goal"
             required
-            help="Cmd/Ctrl+Enter to submit. Be specific — agents follow your prompt verbatim."
+            help="Cmd/Ctrl+Enter to submit. Cmd/Ctrl+K from anywhere to focus this field."
           >
             <Input.TextArea
               autoFocus
               autoSize={{ minRows: 3, maxRows: 10 }}
               placeholder="e.g. Review the browse-profile route components and align their design with browse-support."
+              data-aifleet-goal="1"
               value={goal}
               onChange={(e) => setGoal(e.target.value)}
               onKeyDown={(e) => {

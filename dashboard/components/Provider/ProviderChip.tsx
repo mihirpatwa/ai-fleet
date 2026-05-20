@@ -59,6 +59,11 @@ export function ProviderChip({
             borderRadius: '50%',
             background: hasError ? '#ef4444' : '#10b981',
             marginLeft: 2,
+            // v12: smooth color transition when status flips.
+            transition: 'background-color 220ms ease-out, box-shadow 220ms ease-out',
+            boxShadow: hasError
+              ? '0 0 0 2px rgba(239,68,68,0.18)'
+              : '0 0 0 2px rgba(16,185,129,0.18)',
           }}
         />
       </Button>

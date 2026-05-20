@@ -526,60 +526,74 @@ interface MembersResp {
 
 // t1: cache user list per (org, project) for 5 minutes — Azure team
 // enumeration is multi-call and we don't want to hit it on every drawer open.
-const USERS_CACHE = new Map<string, { at: number; users: string[] }>();
+const USERS_CACHE = new Map<string, { at: number; users: string[]; truncated: boolean }>();
 const USERS_TTL_MS = 5 * 60 * 1000;
+/** v16: TTL exposed so the dashboard can render "cached for X" hints. */
+export const AZURE_USERS_TTL_MS = USERS_TTL_MS;
+const USERS_PAGE_SIZE = 100;
+const USERS_MAX_PAGES = 10;
+
+export interface ProjectUsersResult {
+  users: string[];
+  truncated: boolean;
+  cached_at: number;
+}
 
 /** Best-effort union of all team-members across the project's teams. The PAT
- *  needs `Project and Team: Read` scope; on 403 we degrade silently. */
+ *  needs `Project and Team: Read` scope; on 403 we degrade silently. v7: the
+ *  result flags `truncated` when we hit the page cap so the UI can warn. */
 export async function listProjectUsers(
   orgUrl: string,
   project: string,
   pat: string,
-): Promise<string[]> {
+): Promise<ProjectUsersResult> {
   const cacheKey = `${trimOrgUrl(orgUrl)}|${project}`;
   const cached = USERS_CACHE.get(cacheKey);
-  if (cached && Date.now() - cached.at < USERS_TTL_MS) return cached.users;
+  if (cached && Date.now() - cached.at < USERS_TTL_MS) {
+    return { users: cached.users, truncated: cached.truncated, cached_at: cached.at };
+  }
+  let truncated = false;
   try {
-    // u1: page through teams. Azure returns up to $top per call; we cap at
-    // 1000 (10 pages × 100) which covers every project I've seen.
     const allTeams: Array<{ id: string; name: string }> = [];
-    const pageSize = 100;
-    for (let skip = 0; skip < 1000; skip += pageSize) {
+    for (let page = 0; page < USERS_MAX_PAGES; page++) {
       const teamsUrl = `${joinOrgProject(orgUrl, project)}/_apis/projects/${encodeURIComponent(
         project,
-      )}/teams?$top=${pageSize}&$skip=${skip}&api-version=${API_VERSION}`;
-      const page = await fetchJson<TeamsResp>(teamsUrl, pat);
-      const teams = page.value ?? [];
+      )}/teams?$top=${USERS_PAGE_SIZE}&$skip=${page * USERS_PAGE_SIZE}&api-version=${API_VERSION}`;
+      const resp = await fetchJson<TeamsResp>(teamsUrl, pat);
+      const teams = resp.value ?? [];
       if (teams.length === 0) break;
       allTeams.push(...teams);
-      if (teams.length < pageSize) break;
+      if (teams.length < USERS_PAGE_SIZE) break;
+      if (page === USERS_MAX_PAGES - 1) truncated = true;
     }
     const names = new Set<string>();
     for (const t of allTeams) {
       try {
-        // Members within a team — same paging shape.
-        for (let mSkip = 0; mSkip < 1000; mSkip += pageSize) {
+        for (let p = 0; p < USERS_MAX_PAGES; p++) {
           const membersUrl = `${trimOrgUrl(orgUrl)}/_apis/projects/${encodeURIComponent(
             project,
-          )}/teams/${encodeURIComponent(t.id)}/members?$top=${pageSize}&$skip=${mSkip}&api-version=${API_VERSION}`;
+          )}/teams/${encodeURIComponent(t.id)}/members?$top=${USERS_PAGE_SIZE}&$skip=${p * USERS_PAGE_SIZE}&api-version=${API_VERSION}`;
           const members = await fetchJson<MembersResp>(membersUrl, pat);
           const rows = members.value ?? [];
           for (const m of rows) {
             const n = m.identity?.displayName?.trim();
             if (n) names.add(n);
           }
-          if (rows.length < pageSize) break;
+          if (rows.length < USERS_PAGE_SIZE) break;
+          if (p === USERS_MAX_PAGES - 1) truncated = true;
         }
       } catch {
         /* individual team failure is non-fatal — try the rest */
       }
     }
     const users = Array.from(names).sort();
-    USERS_CACHE.set(cacheKey, { at: Date.now(), users });
-    return users;
+    const at = Date.now();
+    USERS_CACHE.set(cacheKey, { at, users, truncated });
+    return { users, truncated, cached_at: at };
   } catch {
-    USERS_CACHE.set(cacheKey, { at: Date.now(), users: [] });
-    return [];
+    const at = Date.now();
+    USERS_CACHE.set(cacheKey, { at, users: [], truncated: false });
+    return { users: [], truncated: false, cached_at: at };
   }
 }
 

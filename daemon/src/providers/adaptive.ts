@@ -36,17 +36,31 @@ const ROLE_TIER: Record<string, Tier> = {
 
 type ComplexitySignal = 'upgrade' | 'downgrade' | 'keep';
 
+/** Rough token estimate: count whitespace-separated tokens, with a min-1
+ *  floor for empty strings. Closer to model-token reality than raw char
+ *  length for CJK / non-Latin titles which pack more meaning per char. */
+function approxTokens(title: string): number {
+  const trimmed = title.trim();
+  if (!trimmed) return 0;
+  // chars/4 as fallback for CJK runs; max with word count for English.
+  const words = trimmed.split(/\s+/).filter(Boolean).length;
+  const charBased = Math.round(trimmed.length / 4);
+  return Math.max(words, charBased);
+}
+
 /** Detect upgrade/downgrade signals from the task title alone. The length
  *  component only contributes to upgrade — short titles don't automatically
  *  downgrade since most real goals are short. Easy-verb regex is the only
  *  trigger for downgrade, so the default tier wins unless we're confident
- *  the work is trivial. */
+ *  the work is trivial. v3: switched from char-length to approxTokens so
+ *  multi-byte and CJK titles aren't unfairly upgraded. */
 function complexitySignal(title: string): ComplexitySignal {
   const hardWords =
     /\b(refactor|migrate|architecture|design|audit|review|investigate|root[- ]?cause|optimi[sz]e|debug|race|deadlock|memory leak|performance|benchmark|remediation)\b/i;
   const easyWords =
     /\b(rename|fix typo|add log|update copy|format|lint|comment|reword|tweak copy)\b/i;
-  const longEnough = title.length >= 200;
+  // ~50 tokens (rough equivalent to the old 200-char threshold for English).
+  const longEnough = approxTokens(title) >= 50;
   if (easyWords.test(title)) return 'downgrade';
   if (hardWords.test(title) || longEnough) return 'upgrade';
   return 'keep';

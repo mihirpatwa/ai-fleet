@@ -160,3 +160,62 @@ describe('PATCH /azure/work-items/:id', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe('POST /azure/work-items/:id/comments (v10)', () => {
+  it('forwards the comment text to Azure and returns the refreshed list', async () => {
+    const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        calls.push({ url, init });
+        if (url.includes('/comments') && (init?.method ?? 'GET') === 'POST') {
+          return new Response(JSON.stringify({ id: 1 }), { status: 200 });
+        }
+        if (url.includes('/comments')) {
+          return new Response(
+            JSON.stringify({
+              comments: [
+                {
+                  id: 1,
+                  text: 'hello',
+                  createdBy: { displayName: 'Alice' },
+                  createdDate: '2025-01-01',
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response('{}', { status: 200 });
+      }),
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/azure/work-items/42/comments',
+      payload: { text: 'hello' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { comments: Array<{ text_html: string }> };
+    expect(body.comments?.[0]?.text_html).toBe('hello');
+
+    const postCall = calls.find((c) => c.init?.method === 'POST');
+    expect(postCall).toBeDefined();
+    const sent = JSON.parse((postCall!.init!.body as string) ?? '{}');
+    expect(sent.text).toBe('hello');
+  });
+
+  it('rejects an empty comment with 400', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('{}', { status: 200 })),
+    );
+    const res = await app.inject({
+      method: 'POST',
+      url: '/azure/work-items/42/comments',
+      payload: { text: '   ' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});

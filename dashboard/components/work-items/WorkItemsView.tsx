@@ -54,6 +54,13 @@ import { jsonFetcher } from '@/lib/models';
 import { useActiveProject } from '@/lib/useActiveProject';
 import { useGoalModal } from '@/lib/stores/useGoalModal';
 import {
+  buildQuery,
+  clampPageSize,
+  friendlyAzureError,
+  readFiltersFromSp,
+  writeFiltersToSp,
+} from '@/lib/workItemHelpers';
+import {
   decodeArtifactLabel,
   groupRelations,
   sanitizeHtml,
@@ -128,6 +135,8 @@ export function WorkItemsView() {
   // opens the drawer, Esc closes it. Cursor index is 1-based to match the
   // visible list; -1 means "no cursor yet".
   const [cursor, setCursor] = useState(-1);
+  // u19: keyboard cheatsheet popover.
+  const [shortcuts, setShortcuts] = useState(false);
   const { current: activeProject } = useActiveProject();
   const showGoalModal = useGoalModal((s) => s.show);
 
@@ -147,12 +156,17 @@ export function WorkItemsView() {
   const stateOptions = (statesData?.states ?? []).map((s) => ({ value: s, label: s }));
 
   // t1: full team-member roster for the assignee dropdown — better than
-  // deriving from the current page only.
-  const { data: usersData } = useSWR<{ users: string[] }>(
-    conn?.connected ? '/api/azure/users' : null,
-    jsonFetcher,
-    { revalidateOnFocus: false },
-  );
+  // deriving from the current page only. v7+v16 carry `truncated` +
+  // `cached_at` + `ttl_ms` so we could render hints; current UX consumes
+  // just `users` and treats the rest as best-effort metadata.
+  const { data: usersData } = useSWR<{
+    users: string[];
+    truncated?: boolean;
+    cached_at?: number;
+    ttl_ms?: number;
+  }>(conn?.connected ? '/api/azure/users' : null, jsonFetcher, {
+    revalidateOnFocus: false,
+  });
 
   const listKey = conn?.connected
     ? `/api/azure/work-items?${buildQuery(filters, page - 1, pageSize)}`
@@ -203,6 +217,19 @@ export function WorkItemsView() {
     jsonFetcher,
     { revalidateOnFocus: false },
   );
+
+  // v9: per-type state list for the drawer Select. Scoping to the current
+  // item.type means we offer only the transitions the workflow accepts
+  // instead of the global union (which then 403s on commit).
+  const drawerType = detail?.type;
+  const { data: drawerStatesData } = useSWR<{ states: string[] }>(
+    drawerType && conn?.connected
+      ? `/api/azure/states?type=${encodeURIComponent(drawerType)}`
+      : null,
+    jsonFetcher,
+    { revalidateOnFocus: false },
+  );
+  const drawerStates = drawerStatesData?.states ?? statesData?.states ?? [];
 
   // q7: PATCH the work item's System.State and refresh both the drawer detail
   // and the list (so the table shows the new state immediately).
@@ -343,10 +370,19 @@ export function WorkItemsView() {
           if (item) setOpenId(item.id);
         }
       } else if (e.key === 'Escape') {
-        if (openId !== null) {
+        // u11: don't double-close. If an Antd Modal/Popconfirm is open,
+        // Esc belongs to it; let our handler skip the drawer close.
+        if (
+          openId !== null &&
+          !document.querySelector('.ant-modal-root .ant-modal-content')
+        ) {
           e.preventDefault();
           setOpenId(null);
         }
+      } else if (e.key === '?' && !e.shiftKey === false) {
+        // u19: '?' (shift+/) opens a keyboard cheatsheet popover.
+        e.preventDefault();
+        setShortcuts(true);
       }
     }
     document.addEventListener('keydown', onKey);
@@ -613,7 +649,7 @@ export function WorkItemsView() {
             item={detail}
             comments={commentsData?.comments ?? []}
             orgUrl={conn.org_url}
-            states={statesData?.states ?? []}
+            states={drawerStates}
             assigneeOptions={assigneeOptions.map((o) => o.value)}
             onChangeState={(next) => changeState(detail.id, next)}
             onChangeAssignee={(next) => changeAssignee(detail.id, next)}
@@ -637,7 +673,37 @@ export function WorkItemsView() {
           await mutateConn();
         }}
       />
+
+      <Modal
+        open={shortcuts}
+        title="Keyboard shortcuts"
+        footer={null}
+        onCancel={() => setShortcuts(false)}
+        width={420}
+        getContainer={false}
+      >
+        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+          <ShortcutRow keys={['j']} desc="Move cursor down" />
+          <ShortcutRow keys={['k']} desc="Move cursor up" />
+          <ShortcutRow keys={['Enter']} desc="Open work item" />
+          <ShortcutRow keys={['Esc']} desc="Close drawer" />
+          <ShortcutRow keys={['?']} desc="Show this list" />
+        </Space>
+      </Modal>
     </div>
+  );
+}
+
+function ShortcutRow({ keys, desc }: { keys: string[]; desc: string }) {
+  return (
+    <Space>
+      {keys.map((k) => (
+        <Tag key={k} style={{ fontFamily: 'monospace' }}>
+          {k}
+        </Tag>
+      ))}
+      <Text type="secondary">{desc}</Text>
+    </Space>
   );
 }
 
@@ -1241,94 +1307,8 @@ function ConnectModal({
 }
 
 /* ----------------------------- helpers ---------------------------- */
-
-interface UrlFilters {
-  type?: string[];
-  state?: string[];
-  assigned_to?: string;
-  iteration_path?: string;
-  tag?: string;
-  search?: string;
-}
-
-/** s5: read filter state from the URL searchParams. Multi-value filters are
- *  comma-separated; trim/empty values are dropped. */
-function readFiltersFromSp(sp: URLSearchParams): UrlFilters {
-  const get = (k: string): string | undefined => sp.get(k) ?? undefined;
-  const csv = (k: string): string[] | undefined => {
-    const v = sp.get(k);
-    if (!v) return undefined;
-    const arr = v.split(',').map((s) => s.trim()).filter(Boolean);
-    return arr.length > 0 ? arr : undefined;
-  };
-  return {
-    ...(csv('type') ? { type: csv('type')! } : {}),
-    ...(csv('state') ? { state: csv('state')! } : {}),
-    ...(get('assigned_to') ? { assigned_to: get('assigned_to')! } : {}),
-    ...(get('iteration_path') ? { iteration_path: get('iteration_path')! } : {}),
-    ...(get('tag') ? { tag: get('tag')! } : {}),
-    ...(get('search') ? { search: get('search')! } : {}),
-  };
-}
-
-function writeFiltersToSp(sp: URLSearchParams, f: UrlFilters): void {
-  const setOrDel = (k: string, v?: string | string[]): void => {
-    if (Array.isArray(v)) {
-      if (v.length === 0) sp.delete(k);
-      else sp.set(k, v.join(','));
-    } else if (!v) sp.delete(k);
-    else sp.set(k, v);
-  };
-  setOrDel('type', f.type);
-  setOrDel('state', f.state);
-  setOrDel('assigned_to', f.assigned_to);
-  setOrDel('iteration_path', f.iteration_path);
-  setOrDel('tag', f.tag);
-  setOrDel('search', f.search);
-}
-
-function clampPageSize(n: number): number {
-  if (!Number.isFinite(n) || n <= 0) return 25;
-  if (n > 200) return 200;
-  return n;
-}
-
-/** s7: rephrase common Azure error strings into actionable copy. */
-function friendlyAzureError(raw: string): string {
-  if (/\b403\b/.test(raw))
-    return 'Azure rejected the change — your PAT lacks the required scope (Work Items: Read & Write) or the workflow forbids this transition.';
-  if (/\b401\b/.test(raw))
-    return 'Azure returned 401 — the PAT has expired or been revoked. Reconnect in Settings.';
-  if (/\b404\b/.test(raw))
-    return 'Azure returned 404 — the work item may have been deleted in the project.';
-  if (/cannot be changed/i.test(raw))
-    return 'Azure refused the state transition — choose a state allowed by the workflow.';
-  return raw;
-}
-
-function buildQuery(
-  f: {
-    type?: string[];
-    state?: string[];
-    assigned_to?: string;
-    iteration_path?: string;
-    tag?: string;
-    search?: string;
-  },
-  page: number,
-  pageSize: number,
-): string {
-  const p = new URLSearchParams();
-  if (f.type && f.type.length > 0) p.set('type', f.type.join(','));
-  if (f.state && f.state.length > 0) p.set('state', f.state.join(','));
-  if (f.assigned_to) p.set('assigned_to', f.assigned_to);
-  if (f.iteration_path) p.set('iteration_path', f.iteration_path);
-  if (f.tag) p.set('tag', f.tag);
-  if (f.search) p.set('search', f.search);
-  p.set('page', String(page));
-  p.set('pageSize', String(pageSize));
-  return p.toString();
-}
+// v11: filter/page/error helpers moved to lib/workItemHelpers.ts so they
+// can be unit-tested without dragging the whole component into jsdom.
 
 function typeColor(t: string): string {
   switch (t) {

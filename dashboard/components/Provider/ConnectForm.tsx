@@ -140,7 +140,14 @@ export function ConnectForm({
           Connect
         </Button>
         <Text type="secondary" style={{ fontSize: 12 }}>
-          We probe the API before saving — bad keys never persist.
+          {/* v15: tell the user what's happening when the validate request
+              is in flight (especially for slow networks where the spinner
+              alone reads as a stall). */}
+          {busy
+            ? auth === 'local'
+              ? 'Checking ~/.claude credentials…'
+              : 'Validating against Anthropic /v1/models…'
+            : 'We probe the API before saving — bad keys never persist.'}
         </Text>
       </Space>
     </Form>

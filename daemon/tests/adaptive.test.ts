@@ -65,11 +65,11 @@ describe('pickAdaptiveModel', () => {
     expect(pickAdaptiveModel(c, 'scribe', '')).toBe('claude-haiku-4-5');
   });
 
-  it('upgrades exactly at the 200-char length threshold', () => {
-    const exact = 'a '.repeat(100).trim(); // 199 chars
-    const cross = 'a '.repeat(120).trim(); // 239 chars
-    expect(pickAdaptiveModel(c, 'coder', exact)).toBe('claude-sonnet-4-6');
-    expect(pickAdaptiveModel(c, 'coder', cross)).toBe('claude-opus-4-7');
+  it('upgrades when the approx-token count crosses the threshold (v3)', () => {
+    const short = 'a b c d e f g h i j'; // 10 tokens — below threshold
+    const long = ('lorem ipsum dolor sit amet consectetur ' + 'word ').repeat(20).trim();
+    expect(pickAdaptiveModel(c, 'coder', short)).toBe('claude-sonnet-4-6');
+    expect(pickAdaptiveModel(c, 'coder', long)).toBe('claude-opus-4-7');
   });
 
   it('hard verbs win over a short title', () => {

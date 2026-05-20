@@ -7,6 +7,11 @@ export default defineConfig({
     include: ['tests/**/*.test.{ts,tsx}'],
     globals: false,
   },
+  // v1: TSX in tests needs the automatic JSX runtime so each file doesn't
+  // have to `import React`. Matches Next.js's default JSX transform.
+  esbuild: {
+    jsx: 'automatic',
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, '.'),

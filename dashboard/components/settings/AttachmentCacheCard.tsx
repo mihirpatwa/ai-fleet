@@ -2,7 +2,7 @@
 // t4: read + flush the daemon's in-process Azure attachment cache. Lives
 // inside the Settings "Caches" section.
 import useSWR from 'swr';
-import { App, Button, Progress, Space, Typography } from 'antd';
+import { App, Button, Progress, Space, Tag, Typography } from 'antd';
 import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import { jsonFetcher } from '@/lib/models';
 
@@ -70,6 +70,12 @@ export function AttachmentCacheCard() {
         <Text type="secondary" style={{ fontSize: 12 }}>
           oldest: {fmtAge(oldestAgeMs)}
         </Text>
+        {/* v8: stale-cache hint when oldest entry is more than 30 minutes
+            old — useful signal that the user is hitting cached versions of
+            attachments that have since changed in Azure. */}
+        {oldestAgeMs != null && oldestAgeMs > 30 * 60_000 && (
+          <Tag color="warning">stale &gt; 30m — consider Clear</Tag>
+        )}
       </Space>
       <Progress percent={pct} showInfo={false} size="small" />
       <Space>

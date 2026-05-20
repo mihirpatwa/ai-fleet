@@ -31,6 +31,7 @@ import {
   updateScheduled as updateScheduledRow,
 } from './scheduler.js';
 import {
+  AZURE_USERS_TTL_MS,
   addComment as azureAddComment,
   attachmentCacheStats as azureAttachmentStats,
   clearAttachmentCache as azureAttachmentClear,
@@ -951,7 +952,9 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     }
   });
 
-  // t1: project members for the assignee dropdown.
+  // t1: project members for the assignee dropdown. v7+v16: returns
+  // truncated + cached_at + ttl_ms so the UI can render "cached / stale"
+  // hints.
   app.get('/azure/users', async (_req, reply) => {
     const state = currentAzureState();
     const pat = currentAzurePat();
@@ -959,8 +962,8 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       void reply.code(409);
       return { error: state.error ?? 'azure not connected' };
     }
-    const users = await azureListUsers(state.org_url, state.project, pat);
-    return { users };
+    const result = await azureListUsers(state.org_url, state.project, pat);
+    return { ...result, ttl_ms: AZURE_USERS_TTL_MS };
   });
 
   // States the user can filter by, per work-item type. Cached client-side

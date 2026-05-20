@@ -68,37 +68,57 @@ export function MemoryView({
   const [selected, setSelected] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  // v14: shared aborter for the in-flight bulk action. Set while a batch is
+  // running, null otherwise.
+  const [aborter, setAborter] = useState<AbortController | null>(null);
 
-  async function runBatched<T>(
+  async function runBatched(
     ids: string[],
-    fn: (id: string) => Promise<T>,
-  ): Promise<void> {
+    fn: (id: string, signal: AbortSignal) => Promise<unknown>,
+  ): Promise<{ aborted: boolean }> {
     const total = ids.length;
     const showProgress = total > 50;
     if (showProgress) setProgress({ done: 0, total });
+    const ctl = new AbortController();
+    setAborter(ctl);
     const concurrency = 10;
     let done = 0;
-    for (let i = 0; i < total; i += concurrency) {
-      const slice = ids.slice(i, i + concurrency);
-      await Promise.all(slice.map(fn));
-      done += slice.length;
-      if (showProgress) setProgress({ done, total });
+    let aborted = false;
+    try {
+      for (let i = 0; i < total; i += concurrency) {
+        if (ctl.signal.aborted) {
+          aborted = true;
+          break;
+        }
+        const slice = ids.slice(i, i + concurrency);
+        await Promise.all(slice.map((id) => fn(id, ctl.signal).catch(() => undefined)));
+        done += slice.length;
+        if (showProgress) setProgress({ done, total });
+      }
+    } finally {
+      if (showProgress) setProgress(null);
+      setAborter(null);
     }
-    if (showProgress) setProgress(null);
+    return { aborted };
   }
 
   async function bulkPin(pinned: boolean): Promise<void> {
     if (selected.length === 0) return;
     setBusy(true);
     try {
-      await runBatched(selected, (id) =>
+      const result = await runBatched(selected, (id, signal) =>
         fetch(`/api/memory/${id}/pin`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ pinned }),
+          signal,
         }),
       );
-      message.success(`${pinned ? 'Pinned' : 'Unpinned'} ${selected.length}`);
+      if (result.aborted) {
+        message.info('Cancelled — partial changes saved');
+      } else {
+        message.success(`${pinned ? 'Pinned' : 'Unpinned'} ${selected.length}`);
+      }
       setSelected([]);
       router.refresh();
     } catch (err) {
@@ -111,10 +131,14 @@ export function MemoryView({
     if (selected.length === 0) return;
     setBusy(true);
     try {
-      await runBatched(selected, (id) =>
-        fetch(`/api/memory/${id}`, { method: 'DELETE' }),
+      const result = await runBatched(selected, (id, signal) =>
+        fetch(`/api/memory/${id}`, { method: 'DELETE', signal }),
       );
-      message.success(`Deleted ${selected.length}`);
+      if (result.aborted) {
+        message.info('Cancelled — partial deletions saved');
+      } else {
+        message.success(`Deleted ${selected.length}`);
+      }
       setSelected([]);
       router.refresh();
     } catch (err) {
@@ -227,9 +251,16 @@ export function MemoryView({
       </Space>
       {progress && (
         <Space style={{ marginBottom: 12, width: '100%' }} direction="vertical">
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {progress.done} / {progress.total}
-          </Typography.Text>
+          <Space>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {progress.done} / {progress.total}
+            </Typography.Text>
+            {aborter && (
+              <Button size="small" danger onClick={() => aborter.abort()}>
+                Cancel
+              </Button>
+            )}
+          </Space>
           <Progress
             percent={Math.round((progress.done / progress.total) * 100)}
             showInfo={false}
