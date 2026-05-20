@@ -23,6 +23,7 @@ import {
   DatabaseOutlined,
   FlagOutlined,
   MenuOutlined,
+  ProfileOutlined,
   RobotOutlined,
   SafetyOutlined,
   ScheduleOutlined,
@@ -45,6 +46,7 @@ const { Header, Sider, Content } = Layout;
 const NAV = [
   { key: '/', label: 'Board', icon: <AppstoreOutlined /> },
   { key: '/goals', label: 'Goals', icon: <FlagOutlined /> },
+  { key: '/work-items', label: 'Work items', icon: <ProfileOutlined /> },
   { key: '/agents', label: 'Agents', icon: <RobotOutlined /> },
   { key: '/memory', label: 'Memory', icon: <DatabaseOutlined /> },
   { key: '/security', label: 'Security', icon: <SafetyOutlined /> },

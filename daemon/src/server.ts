@@ -20,6 +20,15 @@ import {
   upsertServer as upsertMcpServer,
   type McpServerConfig,
 } from './mcp/registry.js';
+import { getWorkItem as azureGetWorkItem, listWorkItems as azureListWorkItems, validateConnection as azureValidate } from './azure/client.js';
+import {
+  clearConnection as clearAzureConnection,
+  currentPat as currentAzurePat,
+  currentState as currentAzureState,
+  saveConnection as saveAzureConnection,
+  writePat as writeAzurePat,
+} from './azure/storage.js';
+import type { ListFilter as AzureListFilter, WorkItemType } from './azure/types.js';
 import type { ModelRegistry } from './models.js';
 import { capability as nativePickerCapability, nativePick } from './native-picker.js';
 import { PROVIDERS, findProvider } from './providers/registry.js';
@@ -628,6 +637,83 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     }
     const result = await probeMcpServer(s);
     return result;
+  });
+
+  // ---------------- Phase 18g: Azure Boards ----------------
+  // Connection lives in ~/.aifleet/azure.json + AZURE_DEVOPS_PAT secret.
+  // Work-item endpoints are thin wrappers around the WIQL + workitems REST
+  // calls. We never persist the PAT in azure.json itself.
+
+  app.get('/azure/connection', () => currentAzureState());
+
+  app.post('/azure/connection', async (req, reply) => {
+    const b = (req.body ?? {}) as { org_url?: unknown; project?: unknown; pat?: unknown };
+    const org_url = typeof b.org_url === 'string' ? b.org_url.trim().replace(/\/+$/, '') : '';
+    const project = typeof b.project === 'string' ? b.project.trim() : '';
+    const pat = typeof b.pat === 'string' ? b.pat.trim() : '';
+    if (!org_url || !project || pat.length < 10) {
+      void reply.code(400);
+      return { error: 'body { org_url, project, pat } required (PAT ≥ 10 chars)' };
+    }
+    const probe = await azureValidate(org_url, project, pat);
+    if (!probe.ok) {
+      void reply.code(401);
+      return { error: probe.error ?? 'validation failed' };
+    }
+    writeAzurePat(pat);
+    saveAzureConnection({ org_url, project, validated_at: new Date().toISOString() });
+    logger.info({ org_url, project }, 'azure boards connection saved');
+    return currentAzureState();
+  });
+
+  app.delete('/azure/connection', () => {
+    clearAzureConnection();
+    return currentAzureState();
+  });
+
+  app.get('/azure/work-items', async (req, reply) => {
+    const state = currentAzureState();
+    const pat = currentAzurePat();
+    if (!state.connected || !pat) {
+      void reply.code(409);
+      return { error: state.error ?? 'azure not connected' };
+    }
+    const q = (req.query ?? {}) as Record<string, string | undefined>;
+    const filter: AzureListFilter = {
+      ...(q['type'] ? { type: q['type'].split(',') as WorkItemType[] } : {}),
+      ...(q['state'] ? { state: q['state'].split(',') } : {}),
+      ...(q['assigned_to'] ? { assigned_to: q['assigned_to'] } : {}),
+      ...(q['search'] ? { search: q['search'] } : {}),
+      limit: q['limit'] ? Math.max(1, Math.min(200, Number(q['limit']) || 100)) : 100,
+    };
+    try {
+      const items = await azureListWorkItems(state.org_url, state.project, pat, filter);
+      return { items };
+    } catch (err) {
+      void reply.code(502);
+      return { error: err instanceof Error ? err.message : 'azure call failed' };
+    }
+  });
+
+  app.get<{ Params: { id: string } }>('/azure/work-items/:id', async (req, reply) => {
+    const state = currentAzureState();
+    const pat = currentAzurePat();
+    if (!state.connected || !pat) {
+      void reply.code(409);
+      return { error: state.error ?? 'azure not connected' };
+    }
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      void reply.code(400);
+      return { error: 'id must be a positive integer' };
+    }
+    try {
+      const item = await azureGetWorkItem(state.org_url, state.project, id, pat);
+      return item;
+    } catch (err) {
+      void reply.code(502);
+      return { error: err instanceof Error ? err.message : 'azure call failed' };
+    }
   });
 
   // ---------------- Phase 18: AI provider config ----------------

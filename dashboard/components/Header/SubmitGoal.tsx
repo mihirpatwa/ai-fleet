@@ -3,7 +3,7 @@
 // the old inline Popover Advanced UI; long goals now have room to breathe and
 // the model/agent/workdir overrides are first-class fields instead of hidden.
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import useSWR from 'swr';
 import {
   Alert,
@@ -61,9 +61,12 @@ function EffortLabel({ value, label }: { value: Effort; label: string }) {
 
 export function SubmitGoal({ project }: { project: string }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const sp = useSearchParams();
   const { message } = App.useApp();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [prefillSource, setPrefillSource] = useState<string | null>(null);
 
   // Form state. Defaults applied on open (so model defaults track the latest
   // active.default each time the modal mounts).
@@ -92,16 +95,44 @@ export function SubmitGoal({ project }: { project: string }) {
   // once the SWR settles the real `connected` flag drives the gate.
   const providerOk = providerState ? providerState.connected : true;
 
-  // Reset to defaults whenever the modal opens.
+  // Reset to defaults whenever the modal opens, but honour any goal text
+  // stashed by another route (e.g. /work-items "Send as goal" prefill).
   useEffect(() => {
     if (!open) return;
-    setGoal('');
+    let prefill = '';
+    let source: string | null = null;
+    try {
+      prefill = sessionStorage.getItem('aifleet-prefill-goal') ?? '';
+      source = sessionStorage.getItem('aifleet-prefill-source');
+      if (prefill) {
+        sessionStorage.removeItem('aifleet-prefill-goal');
+        sessionStorage.removeItem('aifleet-prefill-source');
+      }
+    } catch {
+      /* sessionStorage unavailable */
+    }
+    setGoal(prefill);
+    setPrefillSource(source);
     setAgent('orchestrator');
     setModelOverride('');
     setEffort('medium');
     setWdMode('current');
     setWorkdir('');
   }, [open]);
+
+  // Auto-open the modal when arrived with ?openGoalModal=1 (Work items
+  // "Send as goal" route). One-shot: strip the param so a back-nav doesn't
+  // re-fire.
+  useEffect(() => {
+    if (sp.get('openGoalModal') !== '1') return;
+    setOpen(true);
+    const next = new URLSearchParams(sp.toString());
+    next.delete('openGoalModal');
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname);
+    // pathname/sp deps trigger on history nav too; the guard at top is enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sp]);
 
   const effectiveProject = wdMode !== 'current' && workdir ? workdir : project;
   const effectiveModel =
@@ -222,6 +253,17 @@ export function SubmitGoal({ project }: { project: string }) {
               style={{ marginBottom: 16 }}
               message="No AI provider connected"
               description="Connect a provider in Settings → AI provider before submitting goals."
+            />
+          )}
+          {prefillSource && (
+            <Alert
+              type="info"
+              showIcon
+              closable
+              onClose={() => setPrefillSource(null)}
+              style={{ marginBottom: 16 }}
+              message={`Prefilled from ${prefillSource}`}
+              description="Edit before submitting if needed."
             />
           )}
           <Form.Item
