@@ -10,7 +10,7 @@ import { roleColor, statusColor } from '@/lib/theme';
 import { elapsed, parseTs, truncate } from '@/lib/format';
 import { useTicker } from '@/lib/useTicker';
 
-const { Text } = Typography;
+const { Text, Paragraph } = Typography;
 
 export interface CardData {
   task: Task;
@@ -28,8 +28,8 @@ function CardElapsed({ task }: { task: Task }) {
 export function TaskCard({ task, tool, log }: CardData) {
   const role = roleColor(task.assignedAgent);
   return (
-    <Link href={`/task/${task.id}`} style={{ display: 'block' }}>
-      <Card size="small" hoverable styles={{ body: { padding: 12 } }}>
+    <Link href={`/task/${task.id}`} style={{ display: 'block', minWidth: 0 }}>
+      <Card size="small" hoverable styles={{ body: { padding: 12 } }} style={{ width: '100%' }}>
         <div
           style={{
             display: 'flex',
@@ -48,13 +48,13 @@ export function TaskCard({ task, tool, log }: CardData) {
           </Text>
         </div>
 
-        <Text
+        <Paragraph
           strong
-          ellipsis={{ tooltip: task.title }}
-          style={{ display: 'block', marginTop: 8 }}
+          ellipsis={{ rows: 2, tooltip: task.title }}
+          style={{ marginTop: 8, marginBottom: 0, wordBreak: 'break-word' }}
         >
           {task.title}
-        </Text>
+        </Paragraph>
 
         {tool && (
           <Text

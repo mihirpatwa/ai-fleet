@@ -1,5 +1,5 @@
-// Shared client-side model helpers (ModelPicker, /agents, /settings,
-// SubmitGoal). Mirrors the daemon's GET /models / /models/active shapes.
+// Shared client-side model helpers (SubmitGoal modal, /agents, /settings).
+// Mirrors the daemon's GET /models / /models/active shapes.
 export interface ModelInfo {
   id: string;
   display_name: string;

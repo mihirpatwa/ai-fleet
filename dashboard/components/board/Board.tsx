@@ -37,11 +37,15 @@ export function Board({
       : {
           display: 'grid',
           gap: 16,
-          gridTemplateColumns: mode === 'grid5' ? 'repeat(5, 1fr)' : 'repeat(3, 1fr)',
+          // minmax(0, 1fr) lets the track actually be 1fr instead of growing to
+          // its content's min-content width — without it a long unbreakable
+          // card title balloons the column past the viewport.
+          gridTemplateColumns:
+            mode === 'grid5' ? 'repeat(5, minmax(0, 1fr))' : 'repeat(3, minmax(0, 1fr))',
           alignItems: 'flex-start',
         };
   const colStyle: React.CSSProperties =
-    mode === 'scroll' ? { flex: '0 0 80vw', maxWidth: 360 } : {};
+    mode === 'scroll' ? { flex: '0 0 80vw', maxWidth: 360, minWidth: 0 } : { minWidth: 0 };
 
   return (
     <div>

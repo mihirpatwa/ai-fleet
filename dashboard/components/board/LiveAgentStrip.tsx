@@ -12,7 +12,7 @@ import { roleColor, statusColor } from '@/lib/theme';
 import { parseTs, truncate } from '@/lib/format';
 import { useTicker } from '@/lib/useTicker';
 
-const { Text } = Typography;
+const { Text, Paragraph } = Typography;
 
 function LiveTile({ task, tool, log }: CardData) {
   const router = useRouter();
@@ -25,7 +25,7 @@ function LiveTile({ task, tool, log }: CardData) {
       hoverable
       onClick={() => router.push(`/task/${task.id}`)}
       styles={{ body: { padding: 12 } }}
-      style={{ cursor: 'pointer', borderColor: `${role}55` }}
+      style={{ cursor: 'pointer', borderColor: `${role}55`, width: '100%' }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <Avatar size={24} style={{ background: role, fontSize: 12, flex: '0 0 auto' }}>
@@ -39,9 +39,12 @@ function LiveTile({ task, tool, log }: CardData) {
         </Text>
       </div>
 
-      <Text ellipsis={{ tooltip: task.title }} style={{ display: 'block', marginTop: 8 }}>
+      <Paragraph
+        ellipsis={{ rows: 2, tooltip: task.title }}
+        style={{ marginTop: 8, marginBottom: 0, wordBreak: 'break-word' }}
+      >
         {task.title}
-      </Text>
+      </Paragraph>
 
       {tool && (
         <Tag

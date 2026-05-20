@@ -224,7 +224,6 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
           projectRoot: task.projectRoot,
           summary: message,
         });
-        emit(task, 'log', { notify: 'goal_failed', summary: message, root_id: task.rootId });
       }
       queueRetrospector(task);
     }
@@ -350,11 +349,6 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
           taskId: task.id,
           projectRoot: task.projectRoot,
           summary: capSummary,
-        });
-        emit(task, 'log', {
-          notify: 'cost_cap_warning_80',
-          summary: capSummary,
-          root_id: task.rootId,
         });
       }
       return cap.tripped;
@@ -522,11 +516,6 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
           projectRoot: task.projectRoot,
           summary: depSummary,
         });
-        emit(task, 'log', {
-          notify: 'model_deprecated',
-          summary: depSummary,
-          root_id: task.rootId,
-        });
         queueRetrospector(task);
         return;
       }
@@ -563,11 +552,6 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
           taskId: task.id,
           projectRoot: task.projectRoot,
           summary: gate.reason ?? 'blocking security finding',
-        });
-        emit(task, 'log', {
-          notify: 'security_blocking_finding',
-          summary: gate.reason ?? 'blocking security finding',
-          root_id: task.rootId,
         });
         queueRetrospector(task);
         return;
@@ -606,7 +590,6 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
           projectRoot: task.projectRoot,
           summary: task.title,
         });
-        emit(task, 'log', { notify: 'goal_completed', summary: task.title, root_id: task.rootId });
       }
       queueRetrospector(task);
     }

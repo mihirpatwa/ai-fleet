@@ -1,12 +1,10 @@
 'use client';
-// The responsive chrome: fixed 56px Header (logo, project picker, model
-// picker, goal submit, theme toggle, notifications), a collapsible Sider that
-// auto-hides below lg with a hamburger→Drawer fallback, and the Content well.
+// Responsive chrome: Header (logo, project picker, [+ New goal], theme),
+// collapsible Sider (auto-hides below lg → hamburger→Drawer), Content well.
 // Server pages render inside <Content>; data still flows SSR + SSE refresh.
 import { useState, type DragEvent, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  Badge,
   Button,
   Drawer,
   Grid,
@@ -19,7 +17,6 @@ import {
 } from 'antd';
 import {
   AppstoreOutlined,
-  BellOutlined,
   DatabaseOutlined,
   DollarOutlined,
   FlagOutlined,
@@ -34,8 +31,6 @@ import { useActiveProject } from '@/lib/useActiveProject';
 import { useStream } from '@/lib/useStream';
 import { resolveHandle, supportsHandleDrop, type DirHandle } from '@/lib/dirPicker';
 import { Live } from '@/components/live';
-import { Notifier } from '@/components/Notifier';
-import { ModelPicker } from '@/components/Header/ModelPicker';
 import { ProjectPicker } from '@/components/Header/ProjectPicker';
 import { SubmitGoal } from '@/components/Header/SubmitGoal';
 
@@ -77,12 +72,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { current: project, apply: applyProject } = useActiveProject();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [notifs, setNotifs] = useState(0);
 
-  const { connected } = useStream(() => setNotifs((n) => n + 1));
+  const { connected } = useStream();
 
   const isDesktop = !!screens.lg;
-  const showModel = !!screens.md;
   const sel = selectedKey(pathname);
 
   // Drag a folder onto the header (Chromium): resolve it like a pick.
@@ -171,11 +164,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <ProjectPicker />
 
-        {showModel && <ModelPicker width={180} />}
-
         <span style={{ flex: '1 1 auto' }} />
 
-        <SubmitGoal project={project} width={screens.md ? 340 : 200} />
+        <SubmitGoal project={project} />
 
         {/* Hidden on xs to de-crowd the mobile header — also in /settings. */}
         {screens.sm && (
@@ -186,17 +177,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             size="middle"
           />
         )}
-
-        <Tooltip title="Notifications">
-          <Badge count={notifs} size="small" overflowCount={99}>
-            <Button
-              type="text"
-              aria-label="Notifications"
-              icon={<BellOutlined />}
-              onClick={() => setNotifs(0)}
-            />
-          </Badge>
-        </Tooltip>
       </Header>
 
       <Layout>
@@ -233,7 +213,6 @@ export function AppShell({ children }: { children: ReactNode }) {
       </Drawer>
 
       <Live />
-      <Notifier />
     </Layout>
   );
 }
