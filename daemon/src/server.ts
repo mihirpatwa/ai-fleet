@@ -24,9 +24,11 @@ import { capability as nativePickerCapability, nativePick } from './native-picke
 import { PROVIDERS, findProvider } from './providers/registry.js';
 import {
   applyConnect,
+  clearSecretFor,
   clearState,
   currentState,
   envKeyFor,
+  loadState,
   saveState,
 } from './providers/storage.js';
 import type { AuthMethod, ConnectRequest, ProviderName } from './providers/types.js';
@@ -617,6 +619,17 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   app.get('/provider', () => currentState());
 
   app.delete('/provider', () => {
+    // p3: drop the API key from secrets.env + process.env on disconnect.
+    // Without this the key lingers and a future connect would silently auto-
+    // reuse it instead of forcing the user to re-enter it.
+    const prev = loadState();
+    if (prev.name && prev.auth === 'api_key') {
+      try {
+        clearSecretFor(prev.name);
+      } catch (err) {
+        logger.warn({ err }, 'failed to clear secret on disconnect');
+      }
+    }
     clearState();
     return currentState();
   });

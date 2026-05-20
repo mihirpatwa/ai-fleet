@@ -11,7 +11,7 @@ import { createDb } from '../db.js';
 import { createLogger } from '../logger.js';
 import { createLoop } from '../loop.js';
 import { createModelRegistry } from '../models.js';
-import { loadSecretsIntoEnv } from '../providers/storage.js';
+import { autoDetectProvider, loadSecretsIntoEnv } from '../providers/storage.js';
 import { createScheduler } from '../scheduler.js';
 import { createServer } from '../server.js';
 import { createSpawner } from '../spawn.js';
@@ -27,6 +27,9 @@ async function main(flags: Flags): Promise<void> {
   // BEFORE we instantiate the SDK-using subsystems. A shell-set ANTHROPIC_API_KEY
   // wins (we never overwrite existing env vars).
   loadSecretsIntoEnv();
+  // p1: synthesize a provider connection on first boot when the user already
+  // has ANTHROPIC_API_KEY exported. Skips the first-run modal for that path.
+  autoDetectProvider();
 
   const base = loadConfig(flags.config);
   const config: FleetConfig = {

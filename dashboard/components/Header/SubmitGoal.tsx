@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
 import {
+  Alert,
   App,
   Button,
   Form,
@@ -15,6 +16,7 @@ import {
   Select,
   Space,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import { PlusOutlined, SendOutlined } from '@ant-design/icons';
@@ -27,6 +29,7 @@ import {
   type ModelInfo,
 } from '@/lib/models';
 import { pickDirectory } from '@/lib/dirPicker';
+import type { ProviderState } from '@/lib/provider';
 
 const { Text, Paragraph } = Typography;
 
@@ -37,6 +40,24 @@ interface RecentProject {
 
 type WdMode = 'current' | 'recent' | 'pick';
 type Effort = 'low' | 'medium' | 'high' | 'max';
+
+// Per-effort thinking-budget mapping shown in the tooltip. Claude SDK maps
+// these named levels onto its reasoning-token budget internally; we just hint
+// the magnitude so the user knows what they're picking.
+const EFFORT_BUDGETS: Record<Effort, string> = {
+  low: '~1K thinking tokens — fastest, cheapest',
+  medium: '~8K thinking tokens — balanced default',
+  high: '~32K thinking tokens — better at hard tasks',
+  max: '~64K thinking tokens — slow + costly, best reasoning',
+};
+
+function EffortLabel({ value, label }: { value: Effort; label: string }) {
+  return (
+    <Tooltip title={EFFORT_BUDGETS[value]}>
+      <span>{label}</span>
+    </Tooltip>
+  );
+}
 
 export function SubmitGoal({ project }: { project: string }) {
   const router = useRouter();
@@ -64,6 +85,12 @@ export function SubmitGoal({ project }: { project: string }) {
     jsonFetcher,
     { revalidateOnFocus: false },
   );
+  const { data: providerState } = useSWR<ProviderState>('/api/provider', jsonFetcher, {
+    revalidateOnFocus: false,
+  });
+  // Assume ok pre-fetch so the button doesn't flicker disabled on first paint;
+  // once the SWR settles the real `connected` flag drives the gate.
+  const providerOk = providerState ? providerState.connected : true;
 
   // Reset to defaults whenever the modal opens.
   useEffect(() => {
@@ -145,9 +172,18 @@ export function SubmitGoal({ project }: { project: string }) {
 
   return (
     <>
-      <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
-        New goal
-      </Button>
+      <Tooltip
+        title={providerOk ? '' : 'Connect an AI provider first (Settings → AI provider).'}
+      >
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => setOpen(true)}
+          disabled={!providerOk}
+        >
+          New goal
+        </Button>
+      </Tooltip>
 
       <Modal
         title="Submit a goal"
@@ -164,6 +200,7 @@ export function SubmitGoal({ project }: { project: string }) {
             type="primary"
             icon={<SendOutlined />}
             loading={busy}
+            disabled={!providerOk}
             onClick={submit}
           >
             Submit
@@ -171,6 +208,15 @@ export function SubmitGoal({ project }: { project: string }) {
         ]}
       >
         <Form layout="vertical" component="div">
+          {!providerOk && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="No AI provider connected"
+              description="Connect a provider in Settings → AI provider before submitting goals."
+            />
+          )}
           <Form.Item
             label="Goal"
             required
@@ -264,10 +310,10 @@ export function SubmitGoal({ project }: { project: string }) {
               value={effort}
               onChange={setEffort}
               options={[
-                { label: 'Low', value: 'low' },
-                { label: 'Medium', value: 'medium' },
-                { label: 'High', value: 'high' },
-                { label: 'Max', value: 'max' },
+                { label: <EffortLabel value="low" label="Low" />, value: 'low' },
+                { label: <EffortLabel value="medium" label="Medium" />, value: 'medium' },
+                { label: <EffortLabel value="high" label="High" />, value: 'high' },
+                { label: <EffortLabel value="max" label="Max" />, value: 'max' },
               ]}
             />
           </Form.Item>

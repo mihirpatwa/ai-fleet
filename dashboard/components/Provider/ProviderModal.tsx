@@ -56,8 +56,15 @@ function ProviderCard({
       }}
       styles={{ body: { padding: 16 } }}
     >
-      <Space align="start" size={12} style={{ width: '100%' }}>
-        <Image src={p.logo} alt={p.display_name} width={44} height={44} unoptimized />
+      <Space align="start" size={14} style={{ width: '100%' }}>
+        <Image
+          src={p.logo}
+          alt={p.display_name}
+          width={52}
+          height={52}
+          unoptimized
+          style={{ flex: '0 0 auto', borderRadius: 8 }}
+        />
         <div style={{ flex: 1, minWidth: 0 }}>
           <Space size={6}>
             <Text strong>{p.display_name}</Text>
@@ -148,7 +155,14 @@ export function ProviderModal({
             </a>
           </Space>
           <Space align="start" size={12} style={{ marginBottom: 8 }}>
-            <Image src={picked.logo} alt={picked.display_name} width={40} height={40} unoptimized />
+            <Image
+              src={picked.logo}
+              alt={picked.display_name}
+              width={48}
+              height={48}
+              unoptimized
+              style={{ borderRadius: 8 }}
+            />
             <div>
               <Title level={5} style={{ margin: 0 }}>
                 Connect {picked.display_name}

@@ -165,3 +165,43 @@ export function applyConnect(opts: {
   saveState(state);
   return state;
 }
+
+/**
+ * Phase-18 p1 auto-detect. If no provider state exists yet but the user
+ * already exported ANTHROPIC_API_KEY (or OPENAI_API_KEY) in their shell,
+ * synthesize a connected state on first boot so the dashboard skips the
+ * first-run modal. Idempotent and silent if provider.json is already set.
+ */
+export function autoDetectProvider(): ProviderState | null {
+  const existing = loadState();
+  if (existing.name) return null; // user has already chosen something
+  if (process.env['ANTHROPIC_API_KEY']) {
+    const state: ProviderState = {
+      name: 'claude',
+      connected: true,
+      auth: 'api_key',
+      validated_at: new Date().toISOString(),
+      error: null,
+    };
+    saveState(state);
+    return state;
+  }
+  // Could extend for OpenAI here once that adapter ships.
+  return null;
+}
+
+/** Phase-18 p3: scrub a provider's secret line from ~/.aifleet/secrets.env. */
+export function clearSecretFor(name: ProviderName): void {
+  const key = envKeyFor(name);
+  const current = readSecrets();
+  if (!(key in current)) return;
+  delete current[key];
+  ensureDir(secretsPath());
+  writeFileSync(secretsPath(), serializeSecrets(current), 'utf8');
+  try {
+    chmodSync(secretsPath(), 0o600);
+  } catch {
+    /* best-effort */
+  }
+  delete process.env[key];
+}
