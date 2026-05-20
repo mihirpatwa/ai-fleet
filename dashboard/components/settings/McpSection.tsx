@@ -19,7 +19,15 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
+  CheckCircleTwoTone,
+  CloseCircleTwoTone,
+  DeleteOutlined,
+  EditOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import { jsonFetcher } from '@/lib/models';
 
 const { Text, Paragraph } = Typography;
@@ -49,12 +57,36 @@ interface McpResponse {
   presets: McpPreset[];
 }
 
+interface ProbeState {
+  loading: boolean;
+  ok?: boolean;
+  reason?: string;
+  durationMs?: number;
+}
+
 export function McpSection() {
   const { message } = App.useApp();
   const { data, mutate } = useSWR<McpResponse>('/api/mcp-servers', jsonFetcher, {
     revalidateOnFocus: false,
   });
   const [editing, setEditing] = useState<McpServer | null>(null);
+  const [probes, setProbes] = useState<Record<string, ProbeState>>({});
+
+  async function probe(name: string): Promise<void> {
+    setProbes((p) => ({ ...p, [name]: { loading: true } }));
+    try {
+      const res = await fetch(`/api/mcp-servers/${encodeURIComponent(name)}/probe`, {
+        method: 'POST',
+      });
+      const body = (await res.json()) as ProbeState & { ok?: boolean };
+      setProbes((p) => ({ ...p, [name]: { ...body, loading: false } }));
+    } catch (err) {
+      setProbes((p) => ({
+        ...p,
+        [name]: { loading: false, ok: false, reason: err instanceof Error ? err.message : 'probe failed' },
+      }));
+    }
+  }
 
   async function saveServer(s: McpServer): Promise<void> {
     try {
@@ -123,6 +155,30 @@ export function McpSection() {
                   </Text>
                 </Space>
                 <Space>
+                  {(() => {
+                    const probeState = probes[s.name];
+                    if (!probeState) return null;
+                    if (probeState.loading) return <Tag>probing…</Tag>;
+                    if (probeState.ok) {
+                      return (
+                        <Tooltip title={`healthy (${probeState.durationMs ?? '?'}ms)`}>
+                          <CheckCircleTwoTone twoToneColor="#10b981" style={{ fontSize: 18 }} />
+                        </Tooltip>
+                      );
+                    }
+                    return (
+                      <Tooltip title={probeState.reason ?? 'failed'}>
+                        <CloseCircleTwoTone twoToneColor="#ef4444" style={{ fontSize: 18 }} />
+                      </Tooltip>
+                    );
+                  })()}
+                  <Tooltip title="Run a 4s spawn probe to check the command actually works">
+                    <Button
+                      icon={<ThunderboltOutlined />}
+                      onClick={() => void probe(s.name)}
+                      loading={probes[s.name]?.loading}
+                    />
+                  </Tooltip>
                   <Tooltip title={s.enabled ? 'Disable' : 'Enable'}>
                     <Switch
                       checked={s.enabled}

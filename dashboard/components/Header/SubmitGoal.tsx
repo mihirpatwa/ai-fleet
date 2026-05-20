@@ -281,7 +281,24 @@ export function SubmitGoal({ project }: { project: string }) {
           </Form.Item>
 
           <Space.Compact block style={{ gap: 12, display: 'flex' }}>
-            <Form.Item label="Model" style={{ flex: 1, marginBottom: 0 }}>
+            <Form.Item
+              label={
+                <Space size={6}>
+                  <span>Model</span>
+                  {providerState?.connected && (
+                    <Tag color="blue" style={{ marginInlineEnd: 0, fontWeight: 400 }}>
+                      {providerState.name}
+                    </Tag>
+                  )}
+                </Space>
+              }
+              help={
+                providerState?.connected
+                  ? `Models served by the ${providerState.name} provider.`
+                  : undefined
+              }
+              style={{ flex: 1, marginBottom: 0 }}
+            >
               <Select
                 value={modelOverride}
                 onChange={setModelOverride}

@@ -16,6 +16,7 @@ import {
   PRESETS as MCP_PRESETS,
   deleteServer as deleteMcpServer,
   listMergedServers as listMcpServers,
+  probeServer as probeMcpServer,
   upsertServer as upsertMcpServer,
   type McpServerConfig,
 } from './mcp/registry.js';
@@ -608,6 +609,22 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     const merged = deleteMcpServer(req.params.name);
     logger.info({ name: req.params.name }, 'mcp server deleted');
     return { servers: merged };
+  });
+
+  // p4: cheap "does this thing actually run?" probe used by Settings to show
+  // a green/red dot per server. Spawns the command for up to 4s; if the
+  // process is still alive then, we consider it healthy (MCP stdio servers
+  // run as long as they're connected, so an immediate non-zero exit is the
+  // only signal of breakage).
+  app.post<{ Params: { name: string } }>('/mcp-servers/:name/probe', async (req, reply) => {
+    const all = listMcpServers();
+    const s = all.find((x) => x.name === req.params.name);
+    if (!s) {
+      void reply.code(404);
+      return { ok: false, reason: `unknown mcp: ${req.params.name}` };
+    }
+    const result = await probeMcpServer(s);
+    return result;
   });
 
   // ---------------- Phase 18: AI provider config ----------------

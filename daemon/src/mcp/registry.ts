@@ -3,6 +3,7 @@
 // Postgres for db work, GitHub for repo ops, etc.). State lives in
 // ~/.aifleet/mcp-servers.json (override via AIFLEET_HOME); spawn.ts reads it
 // per task and passes the enabled set as Claude SDK `options.mcpServers`.
+import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { aifleetDir } from '../config.js';
@@ -167,4 +168,73 @@ export function deleteServer(name: string): McpServerConfig[] {
   const all = loadServers().filter((s) => s.name !== name);
   saveServers(all);
   return listMergedServers();
+}
+
+/* ---------------------------- p4 health probe ---------------------------- */
+
+export interface ProbeResult {
+  ok: boolean;
+  reason?: string;
+  durationMs: number;
+}
+
+/**
+ * Best-effort probe: spawn the MCP command with stdio piped through and look
+ * for "alive after N ms" as success — MCP servers are stdio JSON-RPC daemons,
+ * so they don't exit on their own. An immediate non-zero exit (e.g. package
+ * not found) is reported as the failure reason. Timeout defaults to 4s to
+ * keep the Settings probe responsive while still tolerating a first-time
+ * `npx -y <pkg>` cold download.
+ */
+export function probeServer(s: McpServerConfig, timeoutMs = 4000): Promise<ProbeResult> {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    let settled = false;
+    const finish = (r: ProbeResult): void => {
+      if (settled) return;
+      settled = true;
+      resolve(r);
+    };
+
+    let proc: ReturnType<typeof spawn>;
+    try {
+      proc = spawn(s.command, s.args, {
+        env: { ...process.env, ...(s.env ?? {}) },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      finish({ ok: false, reason: err instanceof Error ? err.message : 'spawn failed', durationMs: 0 });
+      return;
+    }
+
+    let stderr = '';
+    proc.stderr?.on('data', (d: Buffer) => {
+      stderr += d.toString('utf8').slice(0, 256);
+    });
+
+    const timer = setTimeout(() => {
+      try {
+        proc.kill('SIGTERM');
+      } catch {
+        /* already gone */
+      }
+      finish({ ok: true, durationMs: Date.now() - started });
+    }, timeoutMs);
+
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      finish({ ok: false, reason: err.message, durationMs: Date.now() - started });
+    });
+    proc.on('exit', (code, signal) => {
+      clearTimeout(timer);
+      if (signal === 'SIGTERM') return; // we ended it after the success window
+      if (code === 0) finish({ ok: true, durationMs: Date.now() - started });
+      else
+        finish({
+          ok: false,
+          reason: stderr.trim() || `exited ${code}`,
+          durationMs: Date.now() - started,
+        });
+    });
+  });
 }
