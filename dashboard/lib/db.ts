@@ -456,3 +456,40 @@ export function memoryAgents(): string[] {
     [],
   );
 }
+
+/** Phase 10 scheduled tasks (cron jobs) — read-only listing for /schedules. */
+export interface ScheduledTask {
+  id: string;
+  name: string;
+  cron: string;
+  agent: string;
+  project_root: string | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  enabled: boolean;
+}
+
+export function listScheduledTasks(): ScheduledTask[] {
+  return safe(
+    (d) =>
+      (
+        d
+          .prepare(
+            `SELECT id, name, cron, agent, project_root, last_run_at, next_run_at, enabled
+               FROM scheduled_tasks
+               ORDER BY name ASC`,
+          )
+          .all() as Record<string, unknown>[]
+      ).map((r) => ({
+        id: String(r['id']),
+        name: String(r['name']),
+        cron: String(r['cron']),
+        agent: String(r['agent']),
+        project_root: (r['project_root'] as string) ?? null,
+        last_run_at: (r['last_run_at'] as string) ?? null,
+        next_run_at: (r['next_run_at'] as string) ?? null,
+        enabled: Number(r['enabled']) === 1,
+      })),
+    [],
+  );
+}

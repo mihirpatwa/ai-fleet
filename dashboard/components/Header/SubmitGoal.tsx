@@ -91,6 +91,16 @@ export function SubmitGoal({ project }: { project: string }) {
   const { data: providerState } = useSWR<ProviderState>('/api/provider', jsonFetcher, {
     revalidateOnFocus: false,
   });
+  // q1: surface which MCPs the chosen starting agent will see at spawn time.
+  const { data: mcpData } = useSWR<{
+    servers: Array<{ name: string; display_name?: string; enabled: boolean; allowed_agents?: string[] }>;
+  }>('/api/mcp-servers', jsonFetcher, { revalidateOnFocus: false });
+  const mcpsForAgent =
+    mcpData?.servers
+      .filter((s) => s.enabled)
+      .filter(
+        (s) => !s.allowed_agents || s.allowed_agents.length === 0 || s.allowed_agents.includes(agent),
+      ) ?? [];
   // Assume ok pre-fetch so the button doesn't flicker disabled on first paint;
   // once the SWR settles the real `connected` flag drives the gate.
   const providerOk = providerState ? providerState.connected : true;
@@ -365,6 +375,26 @@ export function SubmitGoal({ project }: { project: string }) {
               />
             </Form.Item>
           </Space.Compact>
+
+          <div style={{ marginTop: 8 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              MCPs visible to {agent}:
+            </Text>{' '}
+            {mcpsForAgent.length === 0 ? (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                memory only
+              </Text>
+            ) : (
+              <Space size={[4, 4]} wrap style={{ marginLeft: 4 }}>
+                <Tag color="default">memory</Tag>
+                {mcpsForAgent.map((s) => (
+                  <Tag key={s.name} color="cyan">
+                    {s.display_name ?? s.name}
+                  </Tag>
+                ))}
+              </Space>
+            )}
+          </div>
 
           <Form.Item
             label="Reasoning effort"

@@ -44,6 +44,10 @@ export function AgentsView({ rows }: { rows: AgentSummary[] }) {
       dataSource={rows}
       pagination={{ pageSize: 20, hideOnSinglePage: true }}
       scroll={{ x: 'max-content' }}
+      locale={{
+        emptyText:
+          'No agent activity yet. Counts populate after the first goal runs against this project.',
+      }}
     />
   );
 }
