@@ -118,6 +118,9 @@ export function ProviderModal({
       onCancel={onClose}
       closable={!!onClose}
       maskClosable={false}
+      // u17: Esc should not dismiss the first-run modal (no onClose = blocking
+      // mode). When Settings reopens it for "Change", Esc behaves normally.
+      keyboard={!!onClose}
       destroyOnClose
       footer={null}
       title={picked ? null : 'Choose your AI engine'}

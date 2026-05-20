@@ -73,14 +73,17 @@ export function SubmitGoal({ project }: { project: string }) {
   const storeOpen = useGoalModal((s) => s.open);
   const storePrefillGoal = useGoalModal((s) => s.prefillGoal);
   const storePrefillSource = useGoalModal((s) => s.prefillSource);
+  const storeShowCount = useGoalModal((s) => s.showCount);
   const hideStore = useGoalModal((s) => s.hide);
   // t7: persisted last-used effort + agent so the next session reopens with
   // the same picks. We don't persist goal text on purpose — each goal is a
   // fresh write.
   const defaultAgent = useGoalDefaults((s) => s.agent);
   const defaultEffort = useGoalDefaults((s) => s.effort);
+  const defaultWdMode = useGoalDefaults((s) => s.wdMode);
   const setDefaultAgent = useGoalDefaults((s) => s.setAgent);
   const setDefaultEffort = useGoalDefaults((s) => s.setEffort);
+  const setDefaultWdMode = useGoalDefaults((s) => s.setWdMode);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [prefillSource, setPrefillSource] = useState<string | null>(null);
@@ -146,15 +149,24 @@ export function SubmitGoal({ project }: { project: string }) {
     setAgent(defaultAgent);
     setModelOverride('');
     setEffort(defaultEffort);
-    setWdMode('current');
+    setWdMode(defaultWdMode);
     setWorkdir('');
-  }, [open, storePrefillGoal, storePrefillSource, defaultAgent, defaultEffort]);
+  }, [
+    open,
+    storeShowCount,
+    storePrefillGoal,
+    storePrefillSource,
+    defaultAgent,
+    defaultEffort,
+    defaultWdMode,
+  ]);
 
-  // Mirror the store's `open` into the local Modal-driving state, then
-  // clear the store on close so a subsequent show({...}) reopens cleanly.
+  // Mirror the store's `open` into the local Modal-driving state. u20: rely
+  // on showCount (not storeOpen) so back-to-back show() calls re-fire the
+  // open + reset effect even when the modal was already open.
   useEffect(() => {
     if (storeOpen) setOpen(true);
-  }, [storeOpen]);
+  }, [storeOpen, storeShowCount]);
 
   // Auto-open the modal when arrived with ?openGoalModal=1 (Work items
   // "Send as goal" route). One-shot: strip the param so a back-nav doesn't
@@ -339,6 +351,7 @@ export function SubmitGoal({ project }: { project: string }) {
               value={wdMode}
               onChange={(v) => {
                 setWdMode(v);
+                setDefaultWdMode(v);
                 if (v === 'current') setWorkdir('');
                 if (v === 'pick') void choosePick();
               }}

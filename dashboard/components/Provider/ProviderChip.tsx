@@ -51,7 +51,8 @@ export function ProviderChip({
         <Image src={meta.logo} alt={meta.display_name} width={18} height={18} unoptimized />
         <Text style={{ fontSize: 13 }}>{meta.display_name}</Text>
         <span
-          aria-hidden
+          role="status"
+          aria-label={hasError ? 'AI provider error' : 'AI provider healthy'}
           style={{
             width: 8,
             height: 8,

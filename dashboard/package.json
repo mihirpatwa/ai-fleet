@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "echo \"@ai-fleet/dashboard-v2: no unit tests\" && exit 0"
+    "test": "vitest run"
   },
   "dependencies": {
     "@ant-design/cssinjs": "^1.23.0",
@@ -38,6 +38,8 @@
     "@types/ws": "^8.18.1",
     "eslint": "^9",
     "eslint-config-next": "15.5.4",
-    "typescript": "^5"
+    "jsdom": "^29.1.1",
+    "typescript": "^5",
+    "vitest": "^2.1.9"
   }
 }

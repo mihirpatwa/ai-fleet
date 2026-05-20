@@ -57,4 +57,30 @@ describe('pickAdaptiveModel', () => {
   it('falls back to sonnet for unknown agents', () => {
     expect(pickAdaptiveModel(c, 'some-random-agent', 'do work')).toBe('claude-sonnet-4-6');
   });
+
+  // u15: edge cases — empty title (no signal), exactly-200 chars (threshold).
+  it('keeps the role default on an empty title', () => {
+    expect(pickAdaptiveModel(c, 'orchestrator', '')).toBe('claude-opus-4-7');
+    expect(pickAdaptiveModel(c, 'coder', '')).toBe('claude-sonnet-4-6');
+    expect(pickAdaptiveModel(c, 'scribe', '')).toBe('claude-haiku-4-5');
+  });
+
+  it('upgrades exactly at the 200-char length threshold', () => {
+    const exact = 'a '.repeat(100).trim(); // 199 chars
+    const cross = 'a '.repeat(120).trim(); // 239 chars
+    expect(pickAdaptiveModel(c, 'coder', exact)).toBe('claude-sonnet-4-6');
+    expect(pickAdaptiveModel(c, 'coder', cross)).toBe('claude-opus-4-7');
+  });
+
+  it('hard verbs win over a short title', () => {
+    expect(pickAdaptiveModel(c, 'scribe', 'investigate the deadlock')).toBe(
+      'claude-sonnet-4-6',
+    );
+  });
+
+  it('easy verb downgrades even with a long-ish title', () => {
+    expect(
+      pickAdaptiveModel(c, 'coder', 'fix typo in the README so the install steps render right'),
+    ).toBe('claude-haiku-4-5');
+  });
 });

@@ -415,24 +415,45 @@ export async function addComment(
 interface CacheEntry {
   buffer: Uint8Array;
   contentType: string;
+  /** u2: insertion timestamp (ms) for oldest-entry age. */
+  insertedAt: number;
 }
 const ATTACHMENT_CACHE = new Map<string, CacheEntry>();
 const ATTACHMENT_CACHE_MAX_ENTRIES = 200;
 const ATTACHMENT_CACHE_MAX_BYTES = 50 * 1024 * 1024;
 let attachmentCacheBytes = 0;
+// u2: simple counters for observability.
+let attachmentCacheHits = 0;
+let attachmentCacheMisses = 0;
 
-/** t4: cache stats + clear, used by Settings. */
-export function attachmentCacheStats(): { entries: number; bytes: number; maxBytes: number } {
+/** t4 + u2: cache stats — entries / bytes / max / hits / misses / oldest age. */
+export function attachmentCacheStats(): {
+  entries: number;
+  bytes: number;
+  maxBytes: number;
+  hits: number;
+  misses: number;
+  oldestAgeMs: number | null;
+} {
+  let oldest: number | null = null;
+  for (const v of ATTACHMENT_CACHE.values()) {
+    if (oldest == null || v.insertedAt < oldest) oldest = v.insertedAt;
+  }
   return {
     entries: ATTACHMENT_CACHE.size,
     bytes: attachmentCacheBytes,
     maxBytes: ATTACHMENT_CACHE_MAX_BYTES,
+    hits: attachmentCacheHits,
+    misses: attachmentCacheMisses,
+    oldestAgeMs: oldest == null ? null : Date.now() - oldest,
   };
 }
 export function clearAttachmentCache(): { cleared: number } {
   const cleared = ATTACHMENT_CACHE.size;
   ATTACHMENT_CACHE.clear();
   attachmentCacheBytes = 0;
+  attachmentCacheHits = 0;
+  attachmentCacheMisses = 0;
   return { cleared };
 }
 
@@ -465,9 +486,11 @@ export async function fetchAttachment(
 ): Promise<{ body: Uint8Array; contentType: string; status: number }> {
   const cached = ATTACHMENT_CACHE.get(url);
   if (cached) {
+    attachmentCacheHits++;
     touch(url);
     return { body: cached.buffer, contentType: cached.contentType, status: 200 };
   }
+  attachmentCacheMisses++;
   const res = await fetch(url, {
     headers: { Authorization: authHeader(pat), Accept: '*/*' },
     signal: AbortSignal.timeout(30_000),
@@ -479,7 +502,7 @@ export async function fetchAttachment(
   const buffer = new Uint8Array(await res.arrayBuffer());
   // Cap individual entries to keep one giant PDF from flushing the cache.
   if (buffer.length <= 8 * 1024 * 1024) {
-    ATTACHMENT_CACHE.set(url, { buffer, contentType });
+    ATTACHMENT_CACHE.set(url, { buffer, contentType, insertedAt: Date.now() });
     attachmentCacheBytes += buffer.length;
     evictIfNeeded();
   }
@@ -517,20 +540,35 @@ export async function listProjectUsers(
   const cached = USERS_CACHE.get(cacheKey);
   if (cached && Date.now() - cached.at < USERS_TTL_MS) return cached.users;
   try {
-    const teamsUrl = `${joinOrgProject(orgUrl, project)}/_apis/projects/${encodeURIComponent(
-      project,
-    )}/teams?api-version=${API_VERSION}`;
-    const teams = await fetchJson<TeamsResp>(teamsUrl, pat);
+    // u1: page through teams. Azure returns up to $top per call; we cap at
+    // 1000 (10 pages × 100) which covers every project I've seen.
+    const allTeams: Array<{ id: string; name: string }> = [];
+    const pageSize = 100;
+    for (let skip = 0; skip < 1000; skip += pageSize) {
+      const teamsUrl = `${joinOrgProject(orgUrl, project)}/_apis/projects/${encodeURIComponent(
+        project,
+      )}/teams?$top=${pageSize}&$skip=${skip}&api-version=${API_VERSION}`;
+      const page = await fetchJson<TeamsResp>(teamsUrl, pat);
+      const teams = page.value ?? [];
+      if (teams.length === 0) break;
+      allTeams.push(...teams);
+      if (teams.length < pageSize) break;
+    }
     const names = new Set<string>();
-    for (const t of teams.value ?? []) {
+    for (const t of allTeams) {
       try {
-        const membersUrl = `${trimOrgUrl(orgUrl)}/_apis/projects/${encodeURIComponent(
-          project,
-        )}/teams/${encodeURIComponent(t.id)}/members?api-version=${API_VERSION}`;
-        const members = await fetchJson<MembersResp>(membersUrl, pat);
-        for (const m of members.value ?? []) {
-          const n = m.identity?.displayName?.trim();
-          if (n) names.add(n);
+        // Members within a team — same paging shape.
+        for (let mSkip = 0; mSkip < 1000; mSkip += pageSize) {
+          const membersUrl = `${trimOrgUrl(orgUrl)}/_apis/projects/${encodeURIComponent(
+            project,
+          )}/teams/${encodeURIComponent(t.id)}/members?$top=${pageSize}&$skip=${mSkip}&api-version=${API_VERSION}`;
+          const members = await fetchJson<MembersResp>(membersUrl, pat);
+          const rows = members.value ?? [];
+          for (const m of rows) {
+            const n = m.identity?.displayName?.trim();
+            if (n) names.add(n);
+          }
+          if (rows.length < pageSize) break;
         }
       } catch {
         /* individual team failure is non-fatal — try the rest */

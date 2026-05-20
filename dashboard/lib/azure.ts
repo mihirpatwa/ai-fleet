@@ -76,10 +76,19 @@ let hookInstalled = false;
 function ensureHook(): void {
   if (hookInstalled) return;
   try {
-    DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-      if (!(node instanceof Element)) return;
-      if (node.tagName === 'A' && node.getAttribute('target') === '_blank') {
-        node.setAttribute('rel', 'noopener noreferrer');
+    DOMPurify.addHook('afterSanitizeAttributes', (node: unknown) => {
+      // u13: cross-realm safe — `instanceof Element` fails when DOMPurify
+      // and the host bundle were loaded against different realms (e.g.
+      // jsdom under vitest). nodeType + duck typing is reliable.
+      const n = node as {
+        nodeType?: number;
+        tagName?: string;
+        getAttribute?: (k: string) => string | null;
+        setAttribute?: (k: string, v: string) => void;
+      };
+      if (n.nodeType !== 1) return;
+      if (n.tagName === 'A' && n.getAttribute?.('target') === '_blank') {
+        n.setAttribute?.('rel', 'noopener noreferrer');
       }
     });
     hookInstalled = true;

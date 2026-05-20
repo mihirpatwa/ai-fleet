@@ -131,16 +131,24 @@ export function McpSection() {
     }
   }
 
-  /** t11: probe every enabled server in parallel. Disabled servers are
-   *  skipped — probing one that won't actually be passed to a spawn is
-   *  noise. */
+  /** t11: probe every enabled server. u3: limit concurrency to 3 so a
+   *  laptop with 5+ enabled MCPs doesn't fork that many `npx -y` processes
+   *  at once (cold-install storms have OOM'd small CI hosts). */
   async function probeAll(): Promise<void> {
     const enabled = (data?.servers ?? []).filter((s) => s.enabled);
     if (enabled.length === 0) {
       message.info('No enabled servers to probe.');
       return;
     }
-    await Promise.all(enabled.map((s) => probe(s.name)));
+    const queue = [...enabled];
+    const worker = async (): Promise<void> => {
+      while (queue.length > 0) {
+        const next = queue.shift();
+        if (!next) return;
+        await probe(next.name);
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
   }
 
   async function saveServer(s: McpServer): Promise<void> {

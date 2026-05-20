@@ -10,6 +10,7 @@ import {
   Button,
   Input,
   Popconfirm,
+  Progress,
   Select,
   Space,
   Table,
@@ -59,24 +60,43 @@ export function MemoryView({
   const filtersActive = Boolean(sp.project || sp.agent || sp.tag || sp.q);
 
   // t14: row-level bulk actions. Selection state is local; actions iterate
-  // the existing per-row endpoints in parallel so we don't add a daemon
+  // the existing per-row endpoints in batches so we don't add a daemon
   // surface for bulk operations the user can already do one by one.
+  // u4: progress counter for large selections (>50) so it doesn't look
+  // hung. Runs requests in batches of 10 with progress updates.
   const { message } = App.useApp();
   const [selected, setSelected] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+
+  async function runBatched<T>(
+    ids: string[],
+    fn: (id: string) => Promise<T>,
+  ): Promise<void> {
+    const total = ids.length;
+    const showProgress = total > 50;
+    if (showProgress) setProgress({ done: 0, total });
+    const concurrency = 10;
+    let done = 0;
+    for (let i = 0; i < total; i += concurrency) {
+      const slice = ids.slice(i, i + concurrency);
+      await Promise.all(slice.map(fn));
+      done += slice.length;
+      if (showProgress) setProgress({ done, total });
+    }
+    if (showProgress) setProgress(null);
+  }
 
   async function bulkPin(pinned: boolean): Promise<void> {
     if (selected.length === 0) return;
     setBusy(true);
     try {
-      await Promise.all(
-        selected.map((id) =>
-          fetch(`/api/memory/${id}/pin`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ pinned }),
-          }),
-        ),
+      await runBatched(selected, (id) =>
+        fetch(`/api/memory/${id}/pin`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ pinned }),
+        }),
       );
       message.success(`${pinned ? 'Pinned' : 'Unpinned'} ${selected.length}`);
       setSelected([]);
@@ -91,8 +111,8 @@ export function MemoryView({
     if (selected.length === 0) return;
     setBusy(true);
     try {
-      await Promise.all(
-        selected.map((id) => fetch(`/api/memory/${id}`, { method: 'DELETE' })),
+      await runBatched(selected, (id) =>
+        fetch(`/api/memory/${id}`, { method: 'DELETE' }),
       );
       message.success(`Deleted ${selected.length}`);
       setSelected([]);
@@ -205,6 +225,18 @@ export function MemoryView({
           {rows.length} lesson{rows.length === 1 ? '' : 's'}
         </Typography.Text>
       </Space>
+      {progress && (
+        <Space style={{ marginBottom: 12, width: '100%' }} direction="vertical">
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {progress.done} / {progress.total}
+          </Typography.Text>
+          <Progress
+            percent={Math.round((progress.done / progress.total) * 100)}
+            showInfo={false}
+            size="small"
+          />
+        </Space>
+      )}
       {selected.length > 0 && (
         <Space style={{ marginBottom: 12 }}>
           <Typography.Text strong>{selected.length} selected</Typography.Text>

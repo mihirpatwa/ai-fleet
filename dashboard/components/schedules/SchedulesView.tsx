@@ -71,8 +71,10 @@ export function SchedulesView() {
       const body = (await res.json().catch(() => ({}))) as { task_id?: string; error?: string };
       if (!res.ok) throw new Error(body.error ?? `daemon returned ${res.status}`);
       message.success(`Fired ${name}`);
+      // u12: always refresh the schedules table so last_run_at reflects the
+      // fire even when we route away to the spawned task.
+      await mutate();
       if (body.task_id) router.push(`/task/${body.task_id}`);
-      else await mutate();
     } catch (err) {
       message.error(err instanceof Error ? err.message : 'run failed');
     }

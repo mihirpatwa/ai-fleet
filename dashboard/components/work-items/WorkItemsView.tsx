@@ -252,12 +252,17 @@ export function WorkItemsView() {
 
   // q8/s8: post a new Discussion comment. Returns the refreshed comments
   // array so the drawer rerenders without a full detail refetch.
+  // u14: sanitize the text before sending — Azure stores comment HTML and
+  // would echo back any <script>/javascript: payload to other clients. We
+  // strip dangerous markup but keep harmless formatting (links, lists,
+  // code) so a user-pasted HTML snippet still renders.
   async function postComment(id: number, text: string): Promise<boolean> {
+    const safe = sanitizeHtml(text);
     try {
       const res = await fetch(`/api/azure/work-items/${id}/comments`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: safe }),
       });
       const body = (await res.json().catch(() => ({}))) as {
         comments?: WorkItemComment[];
@@ -348,6 +353,17 @@ export function WorkItemsView() {
     return () => document.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, cursor, openId]);
+
+  // u10: scroll the cursor row into view after j/k. Antd Tables stamp
+  // data-row-key on every <tr>; query by that and call scrollIntoView with
+  // block:'nearest' so the row never disappears off-screen.
+  useEffect(() => {
+    if (cursor < 0 || cursor >= items.length) return;
+    const id = items[cursor]?.id;
+    if (id == null) return;
+    const row = document.querySelector(`tr[data-row-key="${id}"]`);
+    row?.scrollIntoView({ block: 'nearest' });
+  }, [cursor, items]);
 
   if (!conn) return <Paragraph type="secondary">Loading…</Paragraph>;
   if (!conn.connected) {
@@ -873,15 +889,7 @@ function MetaStrip({
           TAGS
         </Text>
         <div style={{ marginTop: 2 }}>
-          <Select<string[]>
-            mode="tags"
-            size="small"
-            value={item.tags}
-            placeholder="Add tags…"
-            style={{ width: '100%' }}
-            onChange={(next) => void onChangeTags(next)}
-            tokenSeparators={[',', ';']}
-          />
+          <TagsEditor tags={item.tags} onSave={onChangeTags} />
         </div>
       </div>
     </div>
@@ -906,6 +914,49 @@ function SanitizedHtml({ html, orgUrl }: { html: string; orgUrl: string }) {
       style={{ fontSize: 14, lineHeight: 1.6 }}
       dangerouslySetInnerHTML={{ __html: sanitizeHtml(html, orgUrl) }}
     />
+  );
+}
+
+function TagsEditor({
+  tags,
+  onSave,
+}: {
+  tags: string[];
+  onSave: (next: string[]) => void | Promise<void>;
+}) {
+  // u5: stage edits locally so a Save click commits the batch instead of
+  // PATCHing on every token. Shows Save/Cancel only when the draft diverges
+  // from the persisted tags.
+  const [draft, setDraft] = useState<string[]>(tags);
+  // Resync when the underlying item changes (drawer reopened on different row).
+  const tagsKey = tags.join('|');
+  const draftKey = draft.join('|');
+  if (tagsKey !== draftKey && tagsKey !== '' && draftKey === '') {
+    setDraft(tags);
+  }
+  const dirty = tagsKey !== draftKey;
+  return (
+    <Space.Compact style={{ width: '100%' }}>
+      <Select<string[]>
+        mode="tags"
+        size="small"
+        value={draft}
+        placeholder="Add tags…"
+        style={{ flex: 1 }}
+        onChange={setDraft}
+        tokenSeparators={[',', ';']}
+      />
+      {dirty && (
+        <>
+          <Button size="small" type="primary" onClick={() => void onSave(draft)}>
+            Save
+          </Button>
+          <Button size="small" onClick={() => setDraft(tags)}>
+            Reset
+          </Button>
+        </>
+      )}
+    </Space.Compact>
   );
 }
 
