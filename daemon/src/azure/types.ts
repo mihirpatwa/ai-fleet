@@ -44,18 +44,34 @@ export interface WorkItemDetail extends WorkItemSummary {
   description_html: string | null;
   acceptance_criteria_html: string | null;
   repro_steps_html: string | null;
+  system_history_html: string | null;
   tags: string[];
   area_path: string | null;
   priority: number | null;
   severity: string | null;
+  effort: number | null;
+  story_points: number | null;
+  created_by: string | null;
+  created_date: string | null;
   attachments: WorkItemAttachment[];
   relations: WorkItemRelation[];
+}
+
+export interface WorkItemComment {
+  id: number;
+  text_html: string;
+  created_by: string;
+  created_date: string;
+  modified_date?: string;
 }
 
 export interface ListFilter {
   type?: WorkItemType[];
   state?: string[];
   assigned_to?: string;
+  iteration_path?: string;
+  area_path?: string;
+  tag?: string;
   search?: string;
   limit?: number;
 }

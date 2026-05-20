@@ -8,6 +8,7 @@ import { Buffer } from 'node:buffer';
 import type {
   ListFilter,
   WorkItemAttachment,
+  WorkItemComment,
   WorkItemDetail,
   WorkItemRelation,
   WorkItemSummary,
@@ -108,6 +109,15 @@ function buildWiql(project: string, filter: ListFilter): string {
   }
   if (filter.assigned_to) {
     where.push(`[System.AssignedTo] = '${quoteWiqlStr(filter.assigned_to)}'`);
+  }
+  if (filter.iteration_path) {
+    where.push(`[System.IterationPath] UNDER '${quoteWiqlStr(filter.iteration_path)}'`);
+  }
+  if (filter.area_path) {
+    where.push(`[System.AreaPath] UNDER '${quoteWiqlStr(filter.area_path)}'`);
+  }
+  if (filter.tag) {
+    where.push(`[System.Tags] CONTAINS '${quoteWiqlStr(filter.tag)}'`);
   }
   if (filter.search) {
     where.push(`[System.Title] CONTAINS '${quoteWiqlStr(filter.search)}'`);
@@ -216,12 +226,14 @@ export async function getWorkItem(
     .map((t) => t.trim())
     .filter(Boolean);
 
+  const createdBy = f['System.CreatedBy'] as { displayName?: string } | undefined;
   return {
     ...summary,
     description_html: (f['System.Description'] as string) ?? null,
     acceptance_criteria_html:
       (f['Microsoft.VSTS.Common.AcceptanceCriteria'] as string) ?? null,
     repro_steps_html: (f['Microsoft.VSTS.TCM.ReproSteps'] as string) ?? null,
+    system_history_html: (f['System.History'] as string) ?? null,
     tags,
     area_path: (f['System.AreaPath'] as string) ?? null,
     priority:
@@ -229,7 +241,97 @@ export async function getWorkItem(
         ? (f['Microsoft.VSTS.Common.Priority'] as number)
         : null,
     severity: (f['Microsoft.VSTS.Common.Severity'] as string) ?? null,
+    effort:
+      typeof f['Microsoft.VSTS.Scheduling.Effort'] === 'number'
+        ? (f['Microsoft.VSTS.Scheduling.Effort'] as number)
+        : null,
+    story_points:
+      typeof f['Microsoft.VSTS.Scheduling.StoryPoints'] === 'number'
+        ? (f['Microsoft.VSTS.Scheduling.StoryPoints'] as number)
+        : null,
+    created_by: createdBy?.displayName ?? null,
+    created_date: (f['System.CreatedDate'] as string) ?? null,
     attachments,
     relations,
   };
+}
+
+/* ---------------------------- comments ---------------------------- */
+
+interface CommentsResp {
+  totalCount: number;
+  count: number;
+  comments?: Array<{
+    id: number;
+    text: string;
+    createdBy?: { displayName?: string };
+    createdDate?: string;
+    modifiedDate?: string;
+  }>;
+}
+
+export async function listComments(
+  orgUrl: string,
+  project: string,
+  id: number,
+  pat: string,
+): Promise<WorkItemComment[]> {
+  // The comments endpoint is on the preview channel even in 7.1.
+  const url = `${joinOrgProject(orgUrl, project)}/_apis/wit/workItems/${id}/comments?api-version=7.1-preview.3&$top=200&order=asc`;
+  try {
+    const body = await fetchJson<CommentsResp>(url, pat);
+    return (body.comments ?? []).map((c) => ({
+      id: c.id,
+      text_html: c.text ?? '',
+      created_by: c.createdBy?.displayName ?? '',
+      created_date: c.createdDate ?? '',
+      ...(c.modifiedDate ? { modified_date: c.modifiedDate } : {}),
+    }));
+  } catch {
+    // Comments preview API can 404 on old collections — degrade quietly.
+    return [];
+  }
+}
+
+/* ---------------------------- attachment proxy ---------------------------- */
+
+/** Stream an attachment through the daemon so the browser can render it
+ *  without leaking the PAT into <img src=...>. */
+export async function fetchAttachment(
+  url: string,
+  pat: string,
+): Promise<{ body: ReadableStream<Uint8Array>; contentType: string; status: number }> {
+  const res = await fetch(url, {
+    headers: { Authorization: authHeader(pat), Accept: '*/*' },
+    signal: AbortSignal.timeout(30_000),
+  });
+  return {
+    body: res.body!,
+    contentType: res.headers.get('content-type') ?? 'application/octet-stream',
+    status: res.status,
+  };
+}
+
+/* ---------------------------- states (per type) ---------------------------- */
+
+interface StatesResp {
+  count: number;
+  value: Array<{ name: string; category?: string }>;
+}
+
+export async function listStatesForType(
+  orgUrl: string,
+  project: string,
+  type: string,
+  pat: string,
+): Promise<string[]> {
+  const url = `${joinOrgProject(orgUrl, project)}/_apis/wit/workitemtypes/${encodeURIComponent(
+    type,
+  )}/states?api-version=${API_VERSION}`;
+  try {
+    const body = await fetchJson<StatesResp>(url, pat);
+    return (body.value ?? []).map((s) => s.name);
+  } catch {
+    return [];
+  }
 }

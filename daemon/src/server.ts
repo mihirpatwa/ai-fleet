@@ -20,7 +20,14 @@ import {
   upsertServer as upsertMcpServer,
   type McpServerConfig,
 } from './mcp/registry.js';
-import { getWorkItem as azureGetWorkItem, listWorkItems as azureListWorkItems, validateConnection as azureValidate } from './azure/client.js';
+import {
+  fetchAttachment as azureFetchAttachment,
+  getWorkItem as azureGetWorkItem,
+  listComments as azureListComments,
+  listStatesForType as azureListStates,
+  listWorkItems as azureListWorkItems,
+  validateConnection as azureValidate,
+} from './azure/client.js';
 import {
   clearConnection as clearAzureConnection,
   currentPat as currentAzurePat,
@@ -683,6 +690,9 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       ...(q['type'] ? { type: q['type'].split(',') as WorkItemType[] } : {}),
       ...(q['state'] ? { state: q['state'].split(',') } : {}),
       ...(q['assigned_to'] ? { assigned_to: q['assigned_to'] } : {}),
+      ...(q['iteration_path'] ? { iteration_path: q['iteration_path'] } : {}),
+      ...(q['area_path'] ? { area_path: q['area_path'] } : {}),
+      ...(q['tag'] ? { tag: q['tag'] } : {}),
       ...(q['search'] ? { search: q['search'] } : {}),
       limit: q['limit'] ? Math.max(1, Math.min(200, Number(q['limit']) || 100)) : 100,
     };
@@ -713,6 +723,79 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     } catch (err) {
       void reply.code(502);
       return { error: err instanceof Error ? err.message : 'azure call failed' };
+    }
+  });
+
+  app.get<{ Params: { id: string } }>('/azure/work-items/:id/comments', async (req, reply) => {
+    const state = currentAzureState();
+    const pat = currentAzurePat();
+    if (!state.connected || !pat) {
+      void reply.code(409);
+      return { error: state.error ?? 'azure not connected' };
+    }
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      void reply.code(400);
+      return { error: 'id must be a positive integer' };
+    }
+    try {
+      const comments = await azureListComments(state.org_url, state.project, id, pat);
+      return { comments };
+    } catch (err) {
+      void reply.code(502);
+      return { error: err instanceof Error ? err.message : 'azure call failed' };
+    }
+  });
+
+  // States the user can filter by, per work-item type. Cached client-side
+  // but always fresh from Azure to follow project customizations.
+  app.get('/azure/states', async (req, reply) => {
+    const state = currentAzureState();
+    const pat = currentAzurePat();
+    if (!state.connected || !pat) {
+      void reply.code(409);
+      return { error: state.error ?? 'azure not connected' };
+    }
+    const q = (req.query ?? {}) as Record<string, string | undefined>;
+    const types = (q['type'] ? q['type'].split(',') : ['User Story', 'Feature', 'Task', 'Bug', 'Epic'])
+      .filter(Boolean);
+    const seen = new Set<string>();
+    await Promise.all(
+      types.map(async (t) => {
+        const rows = await azureListStates(state.org_url, state.project, t, pat);
+        rows.forEach((r) => seen.add(r));
+      }),
+    );
+    return { states: Array.from(seen).sort() };
+  });
+
+  // Attachment streaming proxy. The browser hits this with the encoded Azure
+  // URL; the daemon adds the PAT and pipes the response back. Keeps the
+  // token out of the rendered DOM.
+  app.get('/azure/attachment', async (req, reply) => {
+    const azureState = currentAzureState();
+    const pat = currentAzurePat();
+    if (!azureState.connected || !pat) {
+      void reply.code(409);
+      return reply.send({ error: azureState.error ?? 'azure not connected' });
+    }
+    const q = (req.query ?? {}) as Record<string, string | undefined>;
+    const url = q['url'];
+    if (!url || !url.startsWith(azureState.org_url)) {
+      void reply.code(400);
+      return reply.send({ error: 'url query param required + must match connected org' });
+    }
+    try {
+      const r = await azureFetchAttachment(url, pat);
+      void reply.code(r.status);
+      reply.header('content-type', r.contentType);
+      reply.header('cache-control', 'private, max-age=300');
+      return reply.send(r.body);
+    } catch (err) {
+      void reply.code(502);
+      return reply.send({
+        error: err instanceof Error ? err.message : 'azure call failed',
+      });
     }
   });
 
