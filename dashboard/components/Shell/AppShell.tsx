@@ -193,11 +193,15 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <SubmitGoal project={project} />
 
-        <ProviderChip
-          state={providerState ?? null}
-          providers={providers?.providers ?? []}
-          onChange={() => setProviderModalOpen(true)}
-        />
+        {/* t17: hide the provider chip on xs to de-crowd the mobile header.
+            Settings still shows it. */}
+        {screens.sm && (
+          <ProviderChip
+            state={providerState ?? null}
+            providers={providers?.providers ?? []}
+            onChange={() => setProviderModalOpen(true)}
+          />
+        )}
 
         {/* Hidden on xs to de-crowd the mobile header — also in /settings. */}
         {screens.sm && (

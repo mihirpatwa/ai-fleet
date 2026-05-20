@@ -131,6 +131,18 @@ export function McpSection() {
     }
   }
 
+  /** t11: probe every enabled server in parallel. Disabled servers are
+   *  skipped — probing one that won't actually be passed to a spawn is
+   *  noise. */
+  async function probeAll(): Promise<void> {
+    const enabled = (data?.servers ?? []).filter((s) => s.enabled);
+    if (enabled.length === 0) {
+      message.info('No enabled servers to probe.');
+      return;
+    }
+    await Promise.all(enabled.map((s) => probe(s.name)));
+  }
+
   async function saveServer(s: McpServer): Promise<void> {
     try {
       const res = await fetch(`/api/mcp-servers/${encodeURIComponent(s.name)}`, {
@@ -260,6 +272,9 @@ export function McpSection() {
           </Button>
           <Button icon={<ReloadOutlined />} onClick={() => void mutate()}>
             Refresh
+          </Button>
+          <Button icon={<ThunderboltOutlined />} onClick={() => void probeAll()}>
+            Probe all
           </Button>
           <Button onClick={() => void exportConfig()}>Export…</Button>
           <Button onClick={() => importInput.current?.click()}>Import…</Button>

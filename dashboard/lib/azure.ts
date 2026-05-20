@@ -66,7 +66,27 @@ export interface WorkItemComment {
 // regex strip. The regex version stayed in the codebase as a fallback for
 // any environment where dompurify can't be loaded (e.g. the unit test SSR
 // path before jsdom mounts).
+//
+// t12: every <a target="_blank"> gets rel="noopener noreferrer" forced via
+// an afterSanitizeAttributes hook, so an attacker-controlled link in an
+// Azure description can't tamper with window.opener.
 import DOMPurify from 'isomorphic-dompurify';
+
+let hookInstalled = false;
+function ensureHook(): void {
+  if (hookInstalled) return;
+  try {
+    DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+      if (!(node instanceof Element)) return;
+      if (node.tagName === 'A' && node.getAttribute('target') === '_blank') {
+        node.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+    hookInstalled = true;
+  } catch {
+    /* ignore — fallback path will handle it */
+  }
+}
 
 const FALLBACK_RE = {
   killTags: /<\/?(script|style|iframe|object|embed|link|meta)[^>]*>/gi,
@@ -86,6 +106,7 @@ function regexFallback(html: string): string {
  *  images and links render without leaking the token. */
 export function sanitizeHtml(html: string | null, orgUrl?: string): string {
   if (!html) return '';
+  ensureHook();
   let cleaned: string;
   try {
     cleaned = DOMPurify.sanitize(html, {
@@ -104,7 +125,10 @@ export function sanitizeHtml(html: string | null, orgUrl?: string): string {
         'colspan',
         'rowspan',
         'align',
+        'name',
+        'id',
       ],
+      ADD_ATTR: ['target', 'rel'],
       FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'meta', 'link'],
     });
   } catch {

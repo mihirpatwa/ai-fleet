@@ -421,6 +421,21 @@ const ATTACHMENT_CACHE_MAX_ENTRIES = 200;
 const ATTACHMENT_CACHE_MAX_BYTES = 50 * 1024 * 1024;
 let attachmentCacheBytes = 0;
 
+/** t4: cache stats + clear, used by Settings. */
+export function attachmentCacheStats(): { entries: number; bytes: number; maxBytes: number } {
+  return {
+    entries: ATTACHMENT_CACHE.size,
+    bytes: attachmentCacheBytes,
+    maxBytes: ATTACHMENT_CACHE_MAX_BYTES,
+  };
+}
+export function clearAttachmentCache(): { cleared: number } {
+  const cleared = ATTACHMENT_CACHE.size;
+  ATTACHMENT_CACHE.clear();
+  attachmentCacheBytes = 0;
+  return { cleared };
+}
+
 function touch(key: string): void {
   const v = ATTACHMENT_CACHE.get(key);
   if (!v) return;
@@ -469,6 +484,65 @@ export async function fetchAttachment(
     evictIfNeeded();
   }
   return { body: buffer, contentType, status: res.status };
+}
+
+/* ---------------------------- project users ---------------------------- */
+
+interface TeamsResp {
+  value: Array<{ id: string; name: string }>;
+}
+interface MembersResp {
+  value: Array<{
+    identity?: {
+      displayName?: string;
+      uniqueName?: string;
+      mailAddress?: string;
+    };
+  }>;
+}
+
+// t1: cache user list per (org, project) for 5 minutes — Azure team
+// enumeration is multi-call and we don't want to hit it on every drawer open.
+const USERS_CACHE = new Map<string, { at: number; users: string[] }>();
+const USERS_TTL_MS = 5 * 60 * 1000;
+
+/** Best-effort union of all team-members across the project's teams. The PAT
+ *  needs `Project and Team: Read` scope; on 403 we degrade silently. */
+export async function listProjectUsers(
+  orgUrl: string,
+  project: string,
+  pat: string,
+): Promise<string[]> {
+  const cacheKey = `${trimOrgUrl(orgUrl)}|${project}`;
+  const cached = USERS_CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.at < USERS_TTL_MS) return cached.users;
+  try {
+    const teamsUrl = `${joinOrgProject(orgUrl, project)}/_apis/projects/${encodeURIComponent(
+      project,
+    )}/teams?api-version=${API_VERSION}`;
+    const teams = await fetchJson<TeamsResp>(teamsUrl, pat);
+    const names = new Set<string>();
+    for (const t of teams.value ?? []) {
+      try {
+        const membersUrl = `${trimOrgUrl(orgUrl)}/_apis/projects/${encodeURIComponent(
+          project,
+        )}/teams/${encodeURIComponent(t.id)}/members?api-version=${API_VERSION}`;
+        const members = await fetchJson<MembersResp>(membersUrl, pat);
+        for (const m of members.value ?? []) {
+          const n = m.identity?.displayName?.trim();
+          if (n) names.add(n);
+        }
+      } catch {
+        /* individual team failure is non-fatal — try the rest */
+      }
+    }
+    const users = Array.from(names).sort();
+    USERS_CACHE.set(cacheKey, { at: Date.now(), users });
+    return users;
+  } catch {
+    USERS_CACHE.set(cacheKey, { at: Date.now(), users: [] });
+    return [];
+  }
 }
 
 /* ---------------------------- states (per type) ---------------------------- */

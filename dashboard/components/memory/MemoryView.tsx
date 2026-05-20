@@ -1,12 +1,27 @@
 'use client';
 // Adaptive memory table. project/agent/tag/q are server filters (push to
 // ?query, lib/db refilters); confidence/used/created sort client-side via
-// Table sorters. r6: matches the Goals filter bar — adds a free-text search
-// + Clear button + count summary.
+// Table sorters. r6 added the matching filter bar; t14 adds row selection
+// with bulk pin + bulk delete actions.
+import { useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Button, Input, Select, Space, Table, Tag, Typography } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { ClearOutlined } from '@ant-design/icons';
+import {
+  App,
+  Button,
+  Input,
+  Popconfirm,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+} from 'antd';
+import type { ColumnsType, TableRowSelection } from 'antd/es/table/interface';
+import {
+  ClearOutlined,
+  DeleteOutlined,
+  PushpinOutlined,
+} from '@ant-design/icons';
 import type { Memory } from '@/lib/types';
 import { roleColor } from '@/lib/theme';
 import { ago, parseTs, pretty } from '@/lib/format';
@@ -42,6 +57,58 @@ export function MemoryView({
     router.push(pathname);
   }
   const filtersActive = Boolean(sp.project || sp.agent || sp.tag || sp.q);
+
+  // t14: row-level bulk actions. Selection state is local; actions iterate
+  // the existing per-row endpoints in parallel so we don't add a daemon
+  // surface for bulk operations the user can already do one by one.
+  const { message } = App.useApp();
+  const [selected, setSelected] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  async function bulkPin(pinned: boolean): Promise<void> {
+    if (selected.length === 0) return;
+    setBusy(true);
+    try {
+      await Promise.all(
+        selected.map((id) =>
+          fetch(`/api/memory/${id}/pin`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ pinned }),
+          }),
+        ),
+      );
+      message.success(`${pinned ? 'Pinned' : 'Unpinned'} ${selected.length}`);
+      setSelected([]);
+      router.refresh();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'bulk pin failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function bulkDelete(): Promise<void> {
+    if (selected.length === 0) return;
+    setBusy(true);
+    try {
+      await Promise.all(
+        selected.map((id) => fetch(`/api/memory/${id}`, { method: 'DELETE' })),
+      );
+      message.success(`Deleted ${selected.length}`);
+      setSelected([]);
+      router.refresh();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'bulk delete failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const rowSelection: TableRowSelection<Memory> = {
+    selectedRowKeys: selected,
+    onChange: (keys) => setSelected(keys.map(String)),
+    preserveSelectedRowKeys: true,
+  };
 
   const columns: ColumnsType<Memory> = [
     {
@@ -138,11 +205,46 @@ export function MemoryView({
           {rows.length} lesson{rows.length === 1 ? '' : 's'}
         </Typography.Text>
       </Space>
+      {selected.length > 0 && (
+        <Space style={{ marginBottom: 12 }}>
+          <Typography.Text strong>{selected.length} selected</Typography.Text>
+          <Button
+            size="small"
+            icon={<PushpinOutlined />}
+            loading={busy}
+            onClick={() => void bulkPin(true)}
+          >
+            Pin
+          </Button>
+          <Button
+            size="small"
+            icon={<PushpinOutlined />}
+            loading={busy}
+            onClick={() => void bulkPin(false)}
+          >
+            Unpin
+          </Button>
+          <Popconfirm
+            title={`Delete ${selected.length} memor${selected.length === 1 ? 'y' : 'ies'}?`}
+            okText="Delete"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => void bulkDelete()}
+          >
+            <Button size="small" danger icon={<DeleteOutlined />} loading={busy}>
+              Delete
+            </Button>
+          </Popconfirm>
+          <Button size="small" onClick={() => setSelected([])}>
+            Clear selection
+          </Button>
+        </Space>
+      )}
       <Table<Memory>
         rowKey="id"
         size="small"
         columns={columns}
         dataSource={rows}
+        rowSelection={rowSelection}
         pagination={{ pageSize: 25, hideOnSinglePage: true }}
         scroll={{ x: 'max-content' }}
         locale={{ emptyText: 'No memories yet. Lessons appear after the retrospector runs.' }}

@@ -30,6 +30,8 @@ import {
 } from '@/lib/models';
 import { pickDirectory } from '@/lib/dirPicker';
 import type { ProviderState } from '@/lib/provider';
+import { useGoalModal } from '@/lib/stores/useGoalModal';
+import { useGoalDefaults } from '@/lib/stores/useGoalDefaults';
 
 const { Text, Paragraph } = Typography;
 
@@ -64,6 +66,21 @@ export function SubmitGoal({ project }: { project: string }) {
   const pathname = usePathname();
   const sp = useSearchParams();
   const { message } = App.useApp();
+  // t10: hook into the shared open/close store so other routes (work items
+  // "Send as goal") can pop the modal without a navigation + sessionStorage
+  // handoff. The local `open` state still drives the actual Modal mount —
+  // we just mirror the store's open flag.
+  const storeOpen = useGoalModal((s) => s.open);
+  const storePrefillGoal = useGoalModal((s) => s.prefillGoal);
+  const storePrefillSource = useGoalModal((s) => s.prefillSource);
+  const hideStore = useGoalModal((s) => s.hide);
+  // t7: persisted last-used effort + agent so the next session reopens with
+  // the same picks. We don't persist goal text on purpose — each goal is a
+  // fresh write.
+  const defaultAgent = useGoalDefaults((s) => s.agent);
+  const defaultEffort = useGoalDefaults((s) => s.effort);
+  const setDefaultAgent = useGoalDefaults((s) => s.setAgent);
+  const setDefaultEffort = useGoalDefaults((s) => s.setEffort);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [prefillSource, setPrefillSource] = useState<string | null>(null);
@@ -105,30 +122,39 @@ export function SubmitGoal({ project }: { project: string }) {
   // once the SWR settles the real `connected` flag drives the gate.
   const providerOk = providerState ? providerState.connected : true;
 
-  // Reset to defaults whenever the modal opens, but honour any goal text
-  // stashed by another route (e.g. /work-items "Send as goal" prefill).
+  // Reset to defaults whenever the modal opens; honour either a sessionStorage
+  // prefill (legacy ?openGoalModal=1 path) or a useGoalModal store prefill
+  // (t10 direct-open path).
   useEffect(() => {
     if (!open) return;
-    let prefill = '';
-    let source: string | null = null;
-    try {
-      prefill = sessionStorage.getItem('aifleet-prefill-goal') ?? '';
-      source = sessionStorage.getItem('aifleet-prefill-source');
-      if (prefill) {
-        sessionStorage.removeItem('aifleet-prefill-goal');
-        sessionStorage.removeItem('aifleet-prefill-source');
+    let prefill = storePrefillGoal;
+    let source: string | null = storePrefillSource;
+    if (!prefill) {
+      try {
+        prefill = sessionStorage.getItem('aifleet-prefill-goal') ?? '';
+        source = sessionStorage.getItem('aifleet-prefill-source');
+        if (prefill) {
+          sessionStorage.removeItem('aifleet-prefill-goal');
+          sessionStorage.removeItem('aifleet-prefill-source');
+        }
+      } catch {
+        /* sessionStorage unavailable */
       }
-    } catch {
-      /* sessionStorage unavailable */
     }
     setGoal(prefill);
     setPrefillSource(source);
-    setAgent('orchestrator');
+    setAgent(defaultAgent);
     setModelOverride('');
-    setEffort('medium');
+    setEffort(defaultEffort);
     setWdMode('current');
     setWorkdir('');
-  }, [open]);
+  }, [open, storePrefillGoal, storePrefillSource, defaultAgent, defaultEffort]);
+
+  // Mirror the store's `open` into the local Modal-driving state, then
+  // clear the store on close so a subsequent show({...}) reopens cleanly.
+  useEffect(() => {
+    if (storeOpen) setOpen(true);
+  }, [storeOpen]);
 
   // Auto-open the modal when arrived with ?openGoalModal=1 (Work items
   // "Send as goal" route). One-shot: strip the param so a back-nav doesn't
@@ -210,6 +236,7 @@ export function SubmitGoal({ project }: { project: string }) {
       }
       message.success('Goal submitted');
       setOpen(false);
+      hideStore();
       router.refresh();
     } catch (err) {
       message.error(err instanceof Error ? err.message : 'Submission failed');
@@ -237,10 +264,19 @@ export function SubmitGoal({ project }: { project: string }) {
         title="Submit a goal"
         open={open}
         width={640}
-        onCancel={() => setOpen(false)}
+        onCancel={() => {
+          setOpen(false);
+          hideStore();
+        }}
         destroyOnClose
         footer={[
-          <Button key="cancel" onClick={() => setOpen(false)}>
+          <Button
+            key="cancel"
+            onClick={() => {
+              setOpen(false);
+              hideStore();
+            }}
+          >
             Cancel
           </Button>,
           <Button
@@ -369,7 +405,10 @@ export function SubmitGoal({ project }: { project: string }) {
             <Form.Item label="Starting agent" style={{ flex: 1, marginBottom: 0 }}>
               <Select
                 value={agent}
-                onChange={setAgent}
+                onChange={(v) => {
+                  setAgent(v);
+                  setDefaultAgent(v);
+                }}
                 options={AGENTS.map((a) => ({ value: a, label: a }))}
                 showSearch
               />
@@ -404,7 +443,10 @@ export function SubmitGoal({ project }: { project: string }) {
             <Segmented<Effort>
               block
               value={effort}
-              onChange={setEffort}
+              onChange={(v) => {
+                setEffort(v);
+                setDefaultEffort(v);
+              }}
               options={[
                 { label: <EffortLabel value="low" label="Low" />, value: 'low' },
                 { label: <EffortLabel value="medium" label="Medium" />, value: 'medium' },

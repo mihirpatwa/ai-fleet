@@ -32,9 +32,12 @@ import {
 } from './scheduler.js';
 import {
   addComment as azureAddComment,
+  attachmentCacheStats as azureAttachmentStats,
+  clearAttachmentCache as azureAttachmentClear,
   fetchAttachment as azureFetchAttachment,
   getWorkItem as azureGetWorkItem,
   listComments as azureListComments,
+  listProjectUsers as azureListUsers,
   listStatesForType as azureListStates,
   listWorkItems as azureListWorkItems,
   updateWorkItem as azureUpdateWorkItem,
@@ -152,7 +155,11 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // through its pino instance and exposes the rest via /metrics. (Passing a
   // typed pino instance here would also rebind the FastifyInstance logger
   // generic and break the declared return type under exactOptionalPropertyTypes.)
-  const app = Fastify();
+  // t16: Fastify defaults bodyLimit to 1 MB. MCP import payloads, larger
+  // task input_json blobs, and future attachment uploads can blow past
+  // that. 8 MB is a safe upper bound for "local control plane" use; if a
+  // future endpoint needs more, raise here.
+  const app = Fastify({ bodyLimit: 8 * 1024 * 1024 });
   await app.register(fastifyWebsocket);
 
   app.get('/healthz', () => ({ ok: true, uptime: process.uptime() }));
@@ -944,6 +951,18 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     }
   });
 
+  // t1: project members for the assignee dropdown.
+  app.get('/azure/users', async (_req, reply) => {
+    const state = currentAzureState();
+    const pat = currentAzurePat();
+    if (!state.connected || !pat) {
+      void reply.code(409);
+      return { error: state.error ?? 'azure not connected' };
+    }
+    const users = await azureListUsers(state.org_url, state.project, pat);
+    return { users };
+  });
+
   // States the user can filter by, per work-item type. Cached client-side
   // but always fresh from Azure to follow project customizations.
   app.get('/azure/states', async (req, reply) => {
@@ -966,6 +985,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     return { states: Array.from(seen).sort() };
   });
 
+  // t4: attachment cache observability + manual flush.
+  app.get('/azure/attachment-cache', () => azureAttachmentStats());
+  app.delete('/azure/attachment-cache', () => azureAttachmentClear());
+
   // Attachment streaming proxy. The browser hits this with the encoded Azure
   // URL; the daemon adds the PAT and pipes the response back. Keeps the
   // token out of the rendered DOM.
@@ -978,9 +1001,28 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     }
     const q = (req.query ?? {}) as Record<string, string | undefined>;
     const url = q['url'];
-    if (!url || !url.startsWith(azureState.org_url)) {
+    // t13: strict origin check. `startsWith(org_url)` previously matched
+    // `https://dev.azure.com/aauti.evil.com/...` against org_url
+    // `https://dev.azure.com/aauti`. Parse + compare origin + path prefix.
+    let allowed = false;
+    if (url) {
+      try {
+        const target = new URL(url);
+        const trusted = new URL(azureState.org_url);
+        const orgPath = trusted.pathname.replace(/\/+$/, '');
+        const targetPath = target.pathname;
+        allowed =
+          target.origin === trusted.origin &&
+          (orgPath === '' ||
+            targetPath === orgPath ||
+            targetPath.startsWith(orgPath + '/'));
+      } catch {
+        allowed = false;
+      }
+    }
+    if (!allowed || !url) {
       void reply.code(400);
-      return reply.send({ error: 'url query param required + must match connected org' });
+      return reply.send({ error: 'url query param required + must point at the connected org' });
     }
     try {
       const r = await azureFetchAttachment(url, pat);

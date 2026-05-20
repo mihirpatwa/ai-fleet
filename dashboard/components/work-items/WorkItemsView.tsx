@@ -20,7 +20,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import useSWR from 'swr';
 import {
   Alert,
@@ -43,13 +43,16 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import {
   ClearOutlined,
+  EditOutlined,
   FileOutlined,
+  ReloadOutlined,
   RocketOutlined,
   SettingOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { jsonFetcher } from '@/lib/models';
 import { useActiveProject } from '@/lib/useActiveProject';
+import { useGoalModal } from '@/lib/stores/useGoalModal';
 import {
   decodeArtifactLabel,
   groupRelations,
@@ -121,7 +124,12 @@ export function WorkItemsView() {
 
   const [connectOpen, setConnectOpen] = useState(false);
   const [runBusy, setRunBusy] = useState(false);
+  // t6: keyboard navigation in the table. j/k step the row cursor, Enter
+  // opens the drawer, Esc closes it. Cursor index is 1-based to match the
+  // visible list; -1 means "no cursor yet".
+  const [cursor, setCursor] = useState(-1);
   const { current: activeProject } = useActiveProject();
+  const showGoalModal = useGoalModal((s) => s.show);
 
   const { data: conn, mutate: mutateConn } = useSWR<AzureConnectionState>(
     '/api/azure/connection',
@@ -138,10 +146,24 @@ export function WorkItemsView() {
   );
   const stateOptions = (statesData?.states ?? []).map((s) => ({ value: s, label: s }));
 
+  // t1: full team-member roster for the assignee dropdown — better than
+  // deriving from the current page only.
+  const { data: usersData } = useSWR<{ users: string[] }>(
+    conn?.connected ? '/api/azure/users' : null,
+    jsonFetcher,
+    { revalidateOnFocus: false },
+  );
+
   const listKey = conn?.connected
     ? `/api/azure/work-items?${buildQuery(filters, page - 1, pageSize)}`
     : null;
-  const { data: listData, error: listError, isLoading } = useSWR<{
+  const {
+    data: listData,
+    error: listError,
+    isLoading,
+    isValidating,
+    mutate: mutateList,
+  } = useSWR<{
     items: WorkItemSummary[];
     total: number;
     page: number;
@@ -151,14 +173,18 @@ export function WorkItemsView() {
   const total = listData?.total ?? items.length;
 
   // Derive assignee / iteration / tag options from the loaded items so the
-  // dropdowns only contain values that actually exist in the project.
-  const assigneeOptions = useMemo(
-    () =>
-      Array.from(new Set(items.map((i) => i.assigned_to).filter((v): v is string => !!v)))
-        .sort()
-        .map((v) => ({ value: v, label: v })),
-    [items],
-  );
+  // dropdowns only contain values that actually exist in the project. t1
+  // prefers the full team-member roster when available; we union both to
+  // cover users who are members but not assigned to anything on this page.
+  const assigneeOptions = useMemo(() => {
+    const fromItems = items
+      .map((i) => i.assigned_to)
+      .filter((v): v is string => !!v);
+    const fromTeams = usersData?.users ?? [];
+    return Array.from(new Set([...fromTeams, ...fromItems]))
+      .sort()
+      .map((v) => ({ value: v, label: v }));
+  }, [items, usersData?.users]);
   const iterationOptions = useMemo(
     () =>
       Array.from(new Set(items.map((i) => i.iteration_path).filter((v): v is string => !!v)))
@@ -197,7 +223,12 @@ export function WorkItemsView() {
         body: JSON.stringify(body),
       });
       const respBody = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(respBody.error ?? `daemon returned ${res.status}`);
+      if (!res.ok) {
+        // s7: translate the most-common Azure failures into something a user
+        // can act on instead of a raw daemon error string.
+        const raw = respBody.error ?? `daemon returned ${res.status}`;
+        throw new Error(friendlyAzureError(raw));
+      }
       message.success(`#${id} ${note}`);
       await mutateDetail();
       if (listKey) void fetch(listKey).catch(() => undefined);
@@ -211,6 +242,12 @@ export function WorkItemsView() {
   }
   function changeAssignee(id: number, next: string | null): Promise<void> {
     return patchItem(id, { assigned_to: next }, next ? `assigned to ${next}` : 'unassigned');
+  }
+  function changeTitle(id: number, next: string): Promise<void> {
+    return patchItem(id, { title: next }, 'title updated');
+  }
+  function changeTags(id: number, next: string[]): Promise<void> {
+    return patchItem(id, { tags: next.join('; ') }, 'tags updated');
   }
 
   // q8/s8: post a new Discussion comment. Returns the refreshed comments
@@ -236,15 +273,13 @@ export function WorkItemsView() {
   }
 
   function sendAsGoal(item: WorkItemDetail): void {
-    const prompt = workItemToGoal(item);
-    try {
-      sessionStorage.setItem('aifleet-prefill-goal', prompt);
-      sessionStorage.setItem('aifleet-prefill-source', `Azure ${item.type} #${item.id}`);
-    } catch {
-      /* sessionStorage unavailable */
-    }
-    message.success(`Prefilled goal from ${item.type} #${item.id}. Opening submit modal…`);
-    router.push('/?openGoalModal=1');
+    // t10: open the header SubmitGoal modal directly via the shared store —
+    // no router navigation, no sessionStorage handoff. The modal mounts in
+    // AppShell so this works from any route.
+    showGoalModal({
+      goal: workItemToGoal(item),
+      source: `Azure ${item.type} #${item.id}`,
+    });
   }
 
   /** s9: skip the modal and submit directly with the current active project +
@@ -277,6 +312,42 @@ export function WorkItemsView() {
       setRunBusy(false);
     }
   }
+
+  // t6: keyboard handler — bind to document so anywhere on /work-items the
+  // shortcuts work. Bail when focus is inside an editable element (textarea,
+  // input, contenteditable) so we don't fight typing.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent): void {
+      const tgt = e.target as HTMLElement | null;
+      const editable =
+        !!tgt &&
+        (tgt.tagName === 'INPUT' ||
+          tgt.tagName === 'TEXTAREA' ||
+          tgt.isContentEditable);
+      if (editable) return;
+      if (e.key === 'j') {
+        e.preventDefault();
+        setCursor((c) => Math.min(items.length - 1, c < 0 ? 0 : c + 1));
+      } else if (e.key === 'k') {
+        e.preventDefault();
+        setCursor((c) => Math.max(0, c < 0 ? 0 : c - 1));
+      } else if (e.key === 'Enter') {
+        if (cursor >= 0 && cursor < items.length) {
+          e.preventDefault();
+          const item = items[cursor];
+          if (item) setOpenId(item.id);
+        }
+      } else if (e.key === 'Escape') {
+        if (openId !== null) {
+          e.preventDefault();
+          setOpenId(null);
+        }
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, cursor, openId]);
 
   if (!conn) return <Paragraph type="secondary">Loading…</Paragraph>;
   if (!conn.connected) {
@@ -405,6 +476,13 @@ export function WorkItemsView() {
         <Button icon={<ClearOutlined />} onClick={() => setFilters(() => ({}))}>
           Clear
         </Button>
+        <Tooltip title="Refresh from Azure now">
+          <Button
+            icon={<ReloadOutlined />}
+            loading={isValidating}
+            onClick={() => void mutateList()}
+          />
+        </Tooltip>
         <Button size="small" onClick={() => setConnectOpen(true)}>
           Connection
         </Button>
@@ -432,6 +510,12 @@ export function WorkItemsView() {
         loading={isLoading}
         columns={columns}
         dataSource={items}
+        rowClassName={(_, idx) => (idx === cursor ? 'wi-cursor-row' : '')}
+        onRow={(_, idx) => ({
+          onMouseEnter: () => {
+            if (typeof idx === 'number') setCursor(idx);
+          },
+        })}
         pagination={{
           current: page,
           pageSize,
@@ -451,6 +535,11 @@ export function WorkItemsView() {
             'No work items match these filters. Clear filters or widen the search.',
         }}
       />
+      <style jsx global>{`
+        .wi-cursor-row > td {
+          background: rgba(99, 102, 241, 0.12) !important;
+        }
+      `}</style>
 
       <Drawer
         open={openId !== null}
@@ -512,6 +601,8 @@ export function WorkItemsView() {
             assigneeOptions={assigneeOptions.map((o) => o.value)}
             onChangeState={(next) => changeState(detail.id, next)}
             onChangeAssignee={(next) => changeAssignee(detail.id, next)}
+            onChangeTitle={(next) => changeTitle(detail.id, next)}
+            onChangeTags={(next) => changeTags(detail.id, next)}
             onPostComment={async (text) => {
               const ok = await postComment(detail.id, text);
               if (ok) await mutateComments();
@@ -544,6 +635,8 @@ function WorkItemBody({
   assigneeOptions,
   onChangeState,
   onChangeAssignee,
+  onChangeTitle,
+  onChangeTags,
   onPostComment,
 }: {
   item: WorkItemDetail;
@@ -553,17 +646,21 @@ function WorkItemBody({
   assigneeOptions: string[];
   onChangeState: (next: string) => void | Promise<void>;
   onChangeAssignee: (next: string | null) => void | Promise<void>;
+  onChangeTitle: (next: string) => void | Promise<void>;
+  onChangeTags: (next: string[]) => void | Promise<void>;
   onPostComment: (text: string) => Promise<boolean>;
 }) {
   const grouped = groupRelations(item.relations);
   return (
     <Space direction="vertical" size={20} style={{ width: '100%' }}>
+      <TitleEditor item={item} onChangeTitle={onChangeTitle} />
       <MetaStrip
         item={item}
         states={states}
         assigneeOptions={assigneeOptions}
         onChangeState={onChangeState}
         onChangeAssignee={onChangeAssignee}
+        onChangeTags={onChangeTags}
       />
 
       {item.description_html && (
@@ -631,18 +728,67 @@ interface MetaRow {
   label: string;
   value: React.ReactNode;
 }
+function TitleEditor({
+  item,
+  onChangeTitle,
+}: {
+  item: WorkItemDetail;
+  onChangeTitle: (next: string) => void | Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.title);
+  // Reset draft whenever the item changes (drawer reopened on different row).
+  if (!editing && draft !== item.title) setDraft(item.title);
+  if (!editing) {
+    return (
+      <Space size={6} style={{ flexWrap: 'wrap' }}>
+        <Text strong style={{ fontSize: 15 }}>
+          {item.title}
+        </Text>
+        <Button
+          type="link"
+          size="small"
+          icon={<EditOutlined />}
+          onClick={() => setEditing(true)}
+        />
+      </Space>
+    );
+  }
+  const save = async (): Promise<void> => {
+    const next = draft.trim();
+    if (next && next !== item.title) await onChangeTitle(next);
+    setEditing(false);
+  };
+  return (
+    <Space.Compact style={{ width: '100%' }}>
+      <Input
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onPressEnter={() => void save()}
+      />
+      <Button type="primary" onClick={() => void save()}>
+        Save
+      </Button>
+      <Button onClick={() => setEditing(false)}>Cancel</Button>
+    </Space.Compact>
+  );
+}
+
 function MetaStrip({
   item,
   states,
   assigneeOptions,
   onChangeState,
   onChangeAssignee,
+  onChangeTags,
 }: {
   item: WorkItemDetail;
   states: string[];
   assigneeOptions: string[];
   onChangeState: (next: string) => void | Promise<void>;
   onChangeAssignee: (next: string | null) => void | Promise<void>;
+  onChangeTags: (next: string[]) => void | Promise<void>;
 }) {
   // q7: state is editable. The Select shows the union of states the workflow
   // exposes; switching dispatches a PATCH. Read-only fallback to a Tag when
@@ -722,20 +868,22 @@ function MetaStrip({
           <div style={{ marginTop: 2 }}>{r.value}</div>
         </div>
       ))}
-      {item.tags.length > 0 && (
-        <div style={{ gridColumn: '1 / -1' }}>
-          <Text type="secondary" style={{ fontSize: 11 }}>
-            TAGS
-          </Text>
-          <div style={{ marginTop: 2 }}>
-            {item.tags.map((t) => (
-              <Tag key={t} color="purple">
-                {t}
-              </Tag>
-            ))}
-          </div>
+      <div style={{ gridColumn: '1 / -1' }}>
+        <Text type="secondary" style={{ fontSize: 11 }}>
+          TAGS
+        </Text>
+        <div style={{ marginTop: 2 }}>
+          <Select<string[]>
+            mode="tags"
+            size="small"
+            value={item.tags}
+            placeholder="Add tags…"
+            style={{ width: '100%' }}
+            onChange={(next) => void onChangeTags(next)}
+            tokenSeparators={[',', ';']}
+          />
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1092,6 +1240,19 @@ function clampPageSize(n: number): number {
   if (!Number.isFinite(n) || n <= 0) return 25;
   if (n > 200) return 200;
   return n;
+}
+
+/** s7: rephrase common Azure error strings into actionable copy. */
+function friendlyAzureError(raw: string): string {
+  if (/\b403\b/.test(raw))
+    return 'Azure rejected the change — your PAT lacks the required scope (Work Items: Read & Write) or the workflow forbids this transition.';
+  if (/\b401\b/.test(raw))
+    return 'Azure returned 401 — the PAT has expired or been revoked. Reconnect in Settings.';
+  if (/\b404\b/.test(raw))
+    return 'Azure returned 404 — the work item may have been deleted in the project.';
+  if (/cannot be changed/i.test(raw))
+    return 'Azure refused the state transition — choose a state allowed by the workflow.';
+  return raw;
 }
 
 function buildQuery(

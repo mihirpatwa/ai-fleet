@@ -32,6 +32,7 @@ import { useTheme, type ThemeMode } from '@/lib/stores/useTheme';
 import type { ProviderMeta, ProviderState } from '@/lib/provider';
 import { ProviderModal } from '@/components/Provider/ProviderModal';
 import { McpSection } from '@/components/settings/McpSection';
+import { AttachmentCacheCard } from '@/components/settings/AttachmentCacheCard';
 
 const { Text, Title, Paragraph } = Typography;
 
@@ -357,6 +358,13 @@ export function SettingsView() {
             <Text type="secondary">Audit log retention — planned.</Text>
           </Space>
         </Space>
+      </Section>
+
+      <Section
+        title="Caches"
+        hint="In-process LRU for Azure attachment bytes — drops PAT round-trips on repeated drawer opens."
+      >
+        <AttachmentCacheCard />
       </Section>
 
       {/* Sticky save bar */}

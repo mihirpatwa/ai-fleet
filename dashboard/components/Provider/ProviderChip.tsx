@@ -18,13 +18,20 @@ export function ProviderChip({
   providers: ProviderMeta[];
   onChange: () => void;
 }) {
-  if (!state?.name || !state.connected) return null;
+  if (!state?.name) return null;
   const meta = providers.find((p) => p.name === state.name);
   if (!meta) return null;
 
+  // t8: surface validation/connection failures inline. Red dot when an error
+  // is sticking around even though state.name is set, amber when the
+  // disconnect bookkeeping is mid-flight (name present but connected:false
+  // with no specific error).
+  const hasError = !state.connected || !!state.error;
   const tip = state.error
     ? `Error: ${state.error}`
-    : `${meta.display_name} · ${state.auth === 'local' ? 'local login' : 'API key'}`;
+    : state.connected
+      ? `${meta.display_name} · ${state.auth === 'local' ? 'local login' : 'API key'}`
+      : `${meta.display_name} · not connected — click to fix`;
 
   return (
     <Tooltip title={tip}>
@@ -37,11 +44,22 @@ export function ProviderChip({
           gap: 6,
           paddingInline: 10,
           height: 32,
+          borderColor: hasError ? '#ef4444' : undefined,
         }}
         aria-label="Change AI provider"
       >
         <Image src={meta.logo} alt={meta.display_name} width={18} height={18} unoptimized />
         <Text style={{ fontSize: 13 }}>{meta.display_name}</Text>
+        <span
+          aria-hidden
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            background: hasError ? '#ef4444' : '#10b981',
+            marginLeft: 2,
+          }}
+        />
       </Button>
     </Tooltip>
   );

@@ -332,13 +332,26 @@ function EditModal({
                 {preview.next.length > 0 && (
                   <div style={{ marginTop: 6 }}>
                     <Text type="secondary" style={{ fontSize: 11 }}>
-                      Next runs:{' '}
+                      Next runs (local time):{' '}
                     </Text>
-                    {preview.next.map((ts) => (
-                      <Tag key={ts} color="default" style={{ marginInlineEnd: 4 }}>
-                        {ts}
-                      </Tag>
-                    ))}
+                    {preview.next.map((ts) => {
+                      const d = new Date(`${ts.replace(' ', 'T')}Z`);
+                      const label = Number.isNaN(d.getTime())
+                        ? ts
+                        : d.toLocaleString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          });
+                      return (
+                        <Tooltip key={ts} title={`${ts} UTC`}>
+                          <Tag color="default" style={{ marginInlineEnd: 4 }}>
+                            {label}
+                          </Tag>
+                        </Tooltip>
+                      );
+                    })}
                   </div>
                 )}
               </>
