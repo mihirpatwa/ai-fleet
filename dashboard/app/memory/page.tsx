@@ -1,5 +1,6 @@
 // Adaptive memory (server component). Reads lib/db; filters via ?query.
 import { listMemoriesDash, memoryAgents, memoryProjects } from '@/lib/db';
+import { getActiveProject } from '@/lib/activeProject';
 import { Section } from '@/components/Shell/Section';
 import { MemoryView } from '@/components/memory/MemoryView';
 
@@ -11,8 +12,9 @@ export default async function MemoryPage({
   searchParams: Promise<{ project?: string; agent?: string; tag?: string }>;
 }) {
   const sp = await searchParams;
+  const project = await getActiveProject(sp.project, undefined);
   const rows = listMemoriesDash({
-    ...(sp.project ? { project: sp.project } : {}),
+    ...(project ? { project } : {}),
     ...(sp.agent ? { agent: sp.agent } : {}),
     ...(sp.tag ? { tag: sp.tag } : {}),
     sort: 'confidence',
