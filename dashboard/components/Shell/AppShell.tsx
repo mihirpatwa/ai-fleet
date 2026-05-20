@@ -1,9 +1,12 @@
 'use client';
-// Responsive chrome: Header (logo, project picker, [+ New goal], theme),
-// collapsible Sider (auto-hides below lg → hamburger→Drawer), Content well.
-// Server pages render inside <Content>; data still flows SSR + SSE refresh.
+// Responsive chrome: Header (logo, project picker, [+ New goal], provider
+// chip, theme), collapsible Sider (auto-hides below lg → hamburger→Drawer),
+// Content well. Server pages render inside <Content>; data still flows SSR +
+// SSE refresh. Phase 18: app blocks behind the first-run provider modal until
+// an AI provider is connected.
 import { useState, type DragEvent, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import useSWR from 'swr';
 import {
   Button,
   Drawer,
@@ -29,9 +32,13 @@ import { useTheme, type ThemeMode } from '@/lib/stores/useTheme';
 import { useActiveProject } from '@/lib/useActiveProject';
 import { useStream } from '@/lib/useStream';
 import { resolveHandle, supportsHandleDrop, type DirHandle } from '@/lib/dirPicker';
+import { jsonFetcher } from '@/lib/models';
+import type { ProviderMeta, ProviderState } from '@/lib/provider';
 import { Live } from '@/components/live';
 import { ProjectPicker } from '@/components/Header/ProjectPicker';
 import { SubmitGoal } from '@/components/Header/SubmitGoal';
+import { ProviderModal } from '@/components/Provider/ProviderModal';
+import { ProviderChip } from '@/components/Provider/ProviderChip';
 
 const { Header, Sider, Content } = Layout;
 
@@ -70,8 +77,26 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { current: project, apply: applyProject } = useActiveProject();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [providerModalOpen, setProviderModalOpen] = useState(false);
 
   const { connected } = useStream();
+
+  // Phase 18: provider list (static metadata) + current connection state.
+  // The first-run modal blocks until `providerState.connected` is true; once
+  // it is, we expose the chip and let the user reopen via Settings or chip.
+  const { data: providers } = useSWR<{ providers: ProviderMeta[] }>(
+    '/api/providers',
+    jsonFetcher,
+    { revalidateOnFocus: false },
+  );
+  const { data: providerState, mutate: mutateProvider } = useSWR<ProviderState>(
+    '/api/provider',
+    jsonFetcher,
+    { revalidateOnFocus: false },
+  );
+  const showFirstRun =
+    providerState !== undefined && !providerState.connected && !providerModalOpen;
+  const showChangeModal = providerModalOpen;
 
   const isDesktop = !!screens.lg;
   const sel = selectedKey(pathname);
@@ -166,6 +191,12 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <SubmitGoal project={project} />
 
+        <ProviderChip
+          state={providerState ?? null}
+          providers={providers?.providers ?? []}
+          onChange={() => setProviderModalOpen(true)}
+        />
+
         {/* Hidden on xs to de-crowd the mobile header — also in /settings. */}
         {screens.sm && (
           <Segmented<ThemeMode>
@@ -211,6 +242,18 @@ export function AppShell({ children }: { children: ReactNode }) {
       </Drawer>
 
       <Live />
+
+      <ProviderModal
+        open={showFirstRun || showChangeModal}
+        providers={providers?.providers ?? []}
+        initialName={showChangeModal ? (providerState?.name ?? null) : null}
+        onConnected={async (state) => {
+          setProviderModalOpen(false);
+          await mutateProvider(state, { revalidate: false });
+        }}
+        // First-run is blocking → no onClose. Change-mode is dismissable.
+        {...(showChangeModal ? { onClose: () => setProviderModalOpen(false) } : {})}
+      />
     </Layout>
   );
 }

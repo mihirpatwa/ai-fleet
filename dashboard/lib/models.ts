@@ -11,7 +11,6 @@ export interface ModelInfo {
 export interface ActiveModels {
   default: string;
   orchestrator: string;
-  per_agent: Record<string, string>;
   per_task_allow_override: boolean;
 }
 

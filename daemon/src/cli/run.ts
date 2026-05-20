@@ -11,6 +11,7 @@ import { createDb } from '../db.js';
 import { createLogger } from '../logger.js';
 import { createLoop } from '../loop.js';
 import { createModelRegistry } from '../models.js';
+import { loadSecretsIntoEnv } from '../providers/storage.js';
 import { createScheduler } from '../scheduler.js';
 import { createServer } from '../server.js';
 import { createSpawner } from '../spawn.js';
@@ -22,6 +23,11 @@ interface Flags {
 }
 
 async function main(flags: Flags): Promise<void> {
+  // Phase 18: pull credentials from ~/.aifleet/secrets.env into process.env
+  // BEFORE we instantiate the SDK-using subsystems. A shell-set ANTHROPIC_API_KEY
+  // wins (we never overwrite existing env vars).
+  loadSecretsIntoEnv();
+
   const base = loadConfig(flags.config);
   const config: FleetConfig = {
     ...base,

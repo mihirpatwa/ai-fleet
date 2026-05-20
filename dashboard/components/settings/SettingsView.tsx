@@ -1,9 +1,9 @@
 'use client';
 // Settings. Theme is a client store (applies instantly). Daemon-backed sections
-// (Default model, Per-agent models, Concurrency, Memory) persist via PUT
-// /api/config or PUT /api/models/agent/*; the daemon reports which changed keys
-// need a restart and we surface that as a banner. Security/retention knobs not
-// yet wired to the daemon are shown disabled rather than faked.
+// (Default model, Concurrency, Memory) persist via PUT /api/config or
+// /api/models/agent/default; the daemon reports which changed keys need a
+// restart and we surface that as a banner. Security/retention knobs not yet
+// wired to the daemon are shown disabled rather than faked.
 import { useEffect, useState } from 'react';
 import useSWR from 'swr';
 import {
@@ -17,33 +17,26 @@ import {
   Slider,
   Space,
   Switch,
-  Table,
   Tag,
   Typography,
 } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { ReloadOutlined } from '@ant-design/icons';
-import { AGENTS } from '@/lib/agents';
-import { roleColor } from '@/lib/theme';
+import Image from 'next/image';
 import {
   groupByTier,
   ctxLabel,
-  priceLabel,
   jsonFetcher,
   type ActiveModels,
   type ModelInfo,
 } from '@/lib/models';
 import { useTheme, type ThemeMode } from '@/lib/stores/useTheme';
+import type { ProviderMeta, ProviderState } from '@/lib/provider';
+import { ProviderModal } from '@/components/Provider/ProviderModal';
 
 const { Text, Title, Paragraph } = Typography;
 
 interface DaemonConfig {
   max_concurrent_agents: number;
   memory: { shadow_runs: number };
-}
-
-function tint(hex: string): React.CSSProperties {
-  return { margin: 0, color: hex, borderColor: hex, background: `${hex}1f` };
 }
 
 // Section wrapper: title row + muted one-line *what & why*. Card stays
@@ -105,7 +98,18 @@ export function SettingsView() {
     jsonFetcher,
     { revalidateOnFocus: false },
   );
+  const { data: providersList } = useSWR<{ providers: ProviderMeta[] }>(
+    '/api/providers',
+    jsonFetcher,
+    { revalidateOnFocus: false },
+  );
+  const { data: providerState, mutate: mutateProvider } = useSWR<ProviderState>(
+    '/api/provider',
+    jsonFetcher,
+    { revalidateOnFocus: false },
+  );
 
+  const [providerModalOpen, setProviderModalOpen] = useState(false);
   const [draft, setDraft] = useState<DaemonConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [restartKeys, setRestartKeys] = useState<string[]>([]);
@@ -118,13 +122,13 @@ export function SettingsView() {
     title: g.tier,
     options: g.models.map((m) => ({
       value: m.id,
-      label: `${m.display_name} — ${ctxLabel(m.context_window)}, ${priceLabel(m.pricing)}`,
+      label: `${m.display_name} — ${ctxLabel(m.context_window)}`,
     })),
   }));
 
-  async function putAgentModel(agent: string, modelId: string): Promise<void> {
+  async function setDefaultModel(modelId: string): Promise<void> {
     try {
-      const res = await fetch(`/api/models/agent/${encodeURIComponent(agent)}`, {
+      const res = await fetch('/api/models/agent/default', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ model_id: modelId }),
@@ -134,16 +138,10 @@ export function SettingsView() {
         throw new Error(b.error ?? `Request failed (${res.status})`);
       }
       await mutateActive();
-      message.success(`${agent} → ${modelId}`);
+      message.success(`default → ${modelId}`);
     } catch (err) {
       message.error(err instanceof Error ? err.message : 'Update failed');
     }
-  }
-
-  async function refreshModels(): Promise<void> {
-    await fetch('/api/models/refresh', { method: 'POST' });
-    void mutateActive();
-    message.success('Model list refreshed');
   }
 
   async function saveDaemon(): Promise<void> {
@@ -185,53 +183,6 @@ export function SettingsView() {
   })();
   const dirty = modifiedKeys.size > 0;
 
-  const agentCols: ColumnsType<{ agent: string }> = [
-    {
-      title: 'Agent',
-      dataIndex: 'agent',
-      render: (a: string) => <Tag style={tint(roleColor(a))}>{a}</Tag>,
-      width: 160,
-    },
-    {
-      title: 'Model',
-      key: 'model',
-      render: (_, r) => {
-        const override = active?.per_agent?.[r.agent];
-        return (
-          <Space>
-            <Select
-              style={{ width: 320 }}
-              size="small"
-              loading={!models || !active}
-              value={override}
-              placeholder={active ? `Default — ${active.default}` : 'Default'}
-              options={modelOptions}
-              onChange={(v) => putAgentModel(r.agent, v)}
-              showSearch
-              optionFilterProp="label"
-              allowClear={!!override}
-            />
-            {override ? <Tag color="gold">override</Tag> : <Tag>using default</Tag>}
-          </Space>
-        );
-      },
-    },
-    {
-      title: '',
-      key: 'reset',
-      width: 140,
-      render: (_, r) => (
-        <Button
-          size="small"
-          disabled={!active || active.per_agent?.[r.agent] === undefined}
-          onClick={() => active && putAgentModel(r.agent, active.default)}
-        >
-          Reset
-        </Button>
-      ),
-    },
-  ];
-
   return (
     <div style={{ maxWidth: 960, paddingBottom: 80 }}>
       <Title level={4}>Settings</Title>
@@ -250,6 +201,49 @@ export function SettingsView() {
           description={`Daemon must restart for: ${restartKeys.join(', ')}.`}
         />
       )}
+
+      <Section
+        title="AI provider"
+        hint="The engine the daemon talks to. Credentials live in ~/.aifleet/secrets.env (chmod 600)."
+      >
+        {(() => {
+          const meta = providersList?.providers.find((p) => p.name === providerState?.name);
+          if (!providerState?.connected || !meta) {
+            return (
+              <Space>
+                <Tag color="warning">Not connected</Tag>
+                <Button type="primary" onClick={() => setProviderModalOpen(true)}>
+                  Connect a provider
+                </Button>
+              </Space>
+            );
+          }
+          return (
+            <Space size={12} align="center" wrap>
+              <Image src={meta.logo} alt={meta.display_name} width={32} height={32} unoptimized />
+              <Space direction="vertical" size={0}>
+                <Text strong>{meta.display_name}</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {providerState.auth === 'local' ? 'Claude Code login' : 'API key from secrets.env'}
+                  {providerState.validated_at
+                    ? ` · validated ${new Date(providerState.validated_at).toLocaleString()}`
+                    : ''}
+                </Text>
+              </Space>
+              <Button onClick={() => setProviderModalOpen(true)}>Change</Button>
+              <Button
+                danger
+                onClick={async () => {
+                  await fetch('/api/provider', { method: 'DELETE' });
+                  await mutateProvider();
+                }}
+              >
+                Disconnect
+              </Button>
+            </Space>
+          );
+        })()}
+      </Section>
 
       <Section title="Theme" hint="Affects only your browser. Stored in localStorage.">
         <Segmented<ThemeMode>
@@ -273,7 +267,7 @@ export function SettingsView() {
             value={active?.default}
             loading={!models || !active}
             options={modelOptions}
-            onChange={(v) => putAgentModel('default', v)}
+            onChange={(v) => setDefaultModel(v)}
             showSearch
             optionFilterProp="label"
           />
@@ -281,24 +275,6 @@ export function SettingsView() {
         </Space>
       </Section>
 
-      <Section
-        title="Per-agent models"
-        hint="Override the default for specific agents — e.g. orchestrator on Opus for planning, coder on Sonnet for cost."
-        extra={
-          <Button size="small" icon={<ReloadOutlined />} onClick={refreshModels}>
-            Refresh list
-          </Button>
-        }
-      >
-        <Table
-          rowKey="agent"
-          size="small"
-          pagination={false}
-          scroll={{ x: 'max-content' }}
-          columns={agentCols}
-          dataSource={AGENTS.map((a) => ({ agent: a }))}
-        />
-      </Section>
 
       <Section
         title={`Concurrency${modifiedKeys.has('max_concurrent_agents') ? ' •' : ''}`}
@@ -403,6 +379,17 @@ export function SettingsView() {
           Save changes
         </Button>
       </div>
+
+      <ProviderModal
+        open={providerModalOpen}
+        providers={providersList?.providers ?? []}
+        initialName={providerState?.name ?? null}
+        onConnected={async (state) => {
+          setProviderModalOpen(false);
+          await mutateProvider(state, { revalidate: false });
+        }}
+        onClose={() => setProviderModalOpen(false)}
+      />
     </div>
   );
 }

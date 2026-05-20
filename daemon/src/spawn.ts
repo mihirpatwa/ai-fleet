@@ -80,9 +80,10 @@ export function parseAgentFile(text: string): ParsedAgent {
 }
 
 /**
- * Resolve the model for an agent. Precedence: per-task override → per-agent
- * selection → orchestrator/default — all from config.model_selection (phase
- * 13). The override is only honoured when per_task_allow_override is set.
+ * Resolve the model for an agent. Precedence: per-task override → orchestrator
+ * special-case → global default. (Phase 18 dropped the per_agent map; agents
+ * other than orchestrator always use model_selection.default unless the goal
+ * form overrides it.)
  */
 export function resolveModel(
   config: FleetConfig,
@@ -91,7 +92,7 @@ export function resolveModel(
 ): string {
   if (override) return override;
   const ms = config.model_selection;
-  return ms.per_agent[agent] ?? (agent === 'orchestrator' ? ms.orchestrator : ms.default);
+  return agent === 'orchestrator' ? ms.orchestrator : ms.default;
 }
 
 /** Per-task model override carried in a task's input_json, if present. */

@@ -57,21 +57,21 @@ const alertsConfig = z
 
 // Phase-13 dynamic model selection. Replaces the static default_model /
 // orchestrator_model / per_agent_models trio (those stay in the schema for
-// back-compat but resolveModel now reads model_selection). `per_agent` is
-// filled by the UI; `default`/`orchestrator` mirror the legacy defaults so a
-// config without this block behaves exactly as before.
+// back-compat but resolveModel now reads model_selection). Phase 18 dropped
+// the per_agent map — every spawn uses model_selection.default (or the
+// per-task override on the goal form). The orchestrator keeps its own slot so
+// planning can stay on a stronger model.
+// Not .strict(): an operator's config.yaml may still carry the dropped
+// per_agent key (phase 18 removed it). Unknown nested keys are ignored.
 const modelSelection = z
   .object({
     default: z.string().min(1).default('claude-sonnet-4-6'),
     orchestrator: z.string().min(1).default('claude-opus-4-7'),
-    per_agent: z.record(z.string(), z.string()).default({}),
     per_task_allow_override: z.boolean().default(true),
   })
-  .strict()
   .default({
     default: 'claude-sonnet-4-6',
     orchestrator: 'claude-opus-4-7',
-    per_agent: {},
     per_task_allow_override: true,
   });
 

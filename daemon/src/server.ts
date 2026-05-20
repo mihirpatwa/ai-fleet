@@ -14,6 +14,16 @@ import { recordAndBroadcast } from './events.js';
 import { onToolUsePost, onToolUsePre } from './hooks.js';
 import type { ModelRegistry } from './models.js';
 import { capability as nativePickerCapability, nativePick } from './native-picker.js';
+import { PROVIDERS, findProvider } from './providers/registry.js';
+import {
+  applyConnect,
+  clearState,
+  currentState,
+  envKeyFor,
+  saveState,
+} from './providers/storage.js';
+import type { AuthMethod, ConnectRequest, ProviderName } from './providers/types.js';
+import { validateProvider } from './providers/validate.js';
 import { resolvePath } from './resolve.js';
 import { deleteRecentProject, listRecentProjects, touchRecentProject } from './recents.js';
 import { deleteMemory, getMemory, listMemories, pinMemory, updateLesson } from './memory.js';
@@ -377,13 +387,12 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   app.get('/models/active', () => ({
     default: config.model_selection.default,
     orchestrator: config.model_selection.orchestrator,
-    per_agent: config.model_selection.per_agent,
     per_task_allow_override: config.model_selection.per_task_allow_override,
   }));
 
   // Mutates the shared in-memory config (resolveModel reads it live on the
-  // next spawn) and persists to config.yaml. name = default | orchestrator |
-  // <agent>. Unknown model_id → 400 with the valid set.
+  // next spawn) and persists to config.yaml. Only `default` and `orchestrator`
+  // are accepted — phase 18 dropped per-agent overrides.
   app.put<{ Params: { name: string } }>('/models/agent/:name', (req, reply) => {
     const body = (req.body ?? {}) as { model_id?: unknown };
     const id = body.model_id;
@@ -399,7 +408,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     const ms = config.model_selection;
     if (name === 'default') ms.default = id;
     else if (name === 'orchestrator') ms.orchestrator = id;
-    else ms.per_agent[name] = id;
+    else {
+      void reply.code(400);
+      return { error: `unsupported slot: ${name} (use 'default' or 'orchestrator')` };
+    }
     try {
       saveConfig(config);
     } catch (err) {
@@ -409,7 +421,6 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     return {
       default: ms.default,
       orchestrator: ms.orchestrator,
-      per_agent: ms.per_agent,
       per_task_allow_override: ms.per_task_allow_override,
     };
   });
@@ -540,6 +551,80 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     }
     void reply.code(503);
     return { error: result.unavailable };
+  });
+
+  // ---------------- Phase 18: AI provider config ----------------
+  // The first-run modal hits these to learn what providers exist, persist
+  // credentials and verify the connection before the dashboard unlocks.
+
+  app.get('/providers', () => ({ providers: PROVIDERS }));
+
+  app.get('/provider', () => currentState());
+
+  app.delete('/provider', () => {
+    clearState();
+    return currentState();
+  });
+
+  app.post('/provider', async (req, reply) => {
+    const b = (req.body ?? {}) as Partial<ConnectRequest>;
+    const name = b.name as ProviderName | undefined;
+    const auth = b.auth as AuthMethod | undefined;
+    if (!name || !auth) {
+      void reply.code(400);
+      return { error: 'body { name, auth } required' };
+    }
+    const meta = findProvider(name);
+    if (!meta) {
+      void reply.code(404);
+      return { error: `unknown provider: ${name}` };
+    }
+    if (!meta.available) {
+      void reply.code(400);
+      return { error: meta.reason ?? `${name} unavailable` };
+    }
+    if (!meta.auth_methods.includes(auth)) {
+      void reply.code(400);
+      return { error: `${name} does not support auth=${auth}` };
+    }
+    if (auth === 'api_key' && (!b.api_key || b.api_key.length < 10)) {
+      void reply.code(400);
+      return { error: 'api_key required (>=10 chars)' };
+    }
+    // Probe credentials before persisting so we never leave the user with a
+    // half-connected provider on disk.
+    const result = await validateProvider(name, auth, b.api_key);
+    if (!result.ok) {
+      const state = currentState();
+      saveState({ ...state, error: result.error ?? 'validation failed' });
+      void reply.code(401);
+      return { error: result.error ?? 'validation failed' };
+    }
+    const next = applyConnect({ name, auth, ...(b.api_key ? { api_key: b.api_key } : {}) });
+    logger.info({ provider: name, auth }, 'provider connected');
+    return next;
+  });
+
+  app.post('/provider/validate', async (req, reply) => {
+    const b = (req.body ?? {}) as Partial<ConnectRequest>;
+    const name = b.name as ProviderName | undefined;
+    const auth = b.auth as AuthMethod | undefined;
+    if (!name || !auth) {
+      void reply.code(400);
+      return { ok: false, error: 'body { name, auth } required' };
+    }
+    const result = await validateProvider(name, auth, b.api_key);
+    return result;
+  });
+
+  // Convenience: which env var holds the API key for a given provider.
+  app.get<{ Params: { name: string } }>('/provider/:name/env-key', (req, reply) => {
+    const name = req.params.name as ProviderName;
+    if (!findProvider(name)) {
+      void reply.code(404);
+      return { error: `unknown provider: ${name}` };
+    }
+    return { env_key: envKeyFor(name) };
   });
 
   app.get('/ws', { websocket: true }, (socket) => {
