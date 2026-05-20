@@ -6,7 +6,7 @@
 // Future stages will introduce per-provider adapters that emit a common
 // AIEvent stream and let the daemon swap engines.
 
-export type ProviderName = 'claude' | 'codex' | 'openai';
+export type ProviderName = 'claude' | 'codex';
 
 export type AuthMethod = 'api_key' | 'local';
 

@@ -121,7 +121,6 @@ export function envKeyFor(name: ProviderName): string {
     case 'claude':
       return 'ANTHROPIC_API_KEY';
     case 'codex':
-    case 'openai':
       return 'OPENAI_API_KEY';
   }
 }

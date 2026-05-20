@@ -1,6 +1,6 @@
 // Client-side mirror of daemon/src/providers/types.ts. Kept duplicated so the
 // dashboard can import without server-only DAEMON dependencies leaking in.
-export type ProviderName = 'claude' | 'codex' | 'openai';
+export type ProviderName = 'claude' | 'codex';
 export type AuthMethod = 'api_key' | 'local';
 
 export interface ProviderCapability {

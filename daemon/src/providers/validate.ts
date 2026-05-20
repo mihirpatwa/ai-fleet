@@ -41,6 +41,6 @@ export async function validateProvider(
   key?: string,
 ): Promise<ValidateResult> {
   if (name === 'claude') return validateClaude(auth, key);
-  // codex/openai stubs — kept for parity but the registry marks them unavailable.
+  // codex stub — kept for parity but the registry marks it unavailable.
   return { ok: false, error: `${name} not implemented yet` };
 }

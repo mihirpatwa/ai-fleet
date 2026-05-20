@@ -15,23 +15,14 @@ export const PROVIDERS: ProviderMeta[] = [
   },
   {
     name: 'codex',
-    display_name: 'Codex CLI',
+    display_name: 'OpenAI Codex',
     logo: '/providers/openai.svg',
-    tagline: 'OpenAI — coming in phase 18c. Awaits a sandbox adapter so the phase-8 denylist still holds.',
+    tagline:
+      'OpenAI GPT-5 / Codex CLI — agent loop via `codex exec`. Sandbox adapter pending so the phase-8 denylist still holds.',
     available: false,
-    reason: 'Sandbox adapter pending — disabled until then.',
+    reason: 'Sandbox adapter pending — phase 18c.',
     auth_methods: ['api_key'],
     capabilities: { toolGate: false, mcp: false, agentLoop: true, streaming: true },
-  },
-  {
-    name: 'openai',
-    display_name: 'OpenAI Responses',
-    logo: '/providers/openai.svg',
-    tagline: 'Direct Responses API — needs a DIY agent loop + tool schema.',
-    available: false,
-    reason: 'Adapter not implemented yet.',
-    auth_methods: ['api_key'],
-    capabilities: { toolGate: false, mcp: false, agentLoop: false, streaming: true },
   },
 ];
 
